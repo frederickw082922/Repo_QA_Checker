@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.2.0
+**Version:** 2.2.1
 
 ---
 
@@ -132,7 +132,7 @@ The tool runs 11 independent checks. Each produces a status of **PASS**, **FAIL*
 | # | Check Name | `--skip` Key | What It Does |
 |---|-----------|--------------|--------------|
 | 1 | **YAML Lint** | `yamllint` | Runs `yamllint -f parsable` against all YAML files. Skipped if `yamllint` is not installed. |
-| 2 | **Ansible Lint** | `ansiblelint` | Runs `ansible-lint -f parsable`. Skipped if `ansible-lint` is not installed. |
+| 2 | **Ansible Lint** | `ansiblelint` | Runs `ansible-lint -f pep8`. Skipped if `ansible-lint` is not installed. |
 | 3 | **Spell Check** | `spelling` | Scans comments and task `name:` fields for ~130 common misspellings. |
 | 4 | **Grammar Check** | `grammar` | Detects repeated words, double spaces, missing apostrophes, and subject-verb disagreement in comments and task names. |
 | 5 | **Unused Variables** | `unused_vars` | **Forward:** Variables defined in `defaults/main.yml` or `vars/` but never referenced. **Reverse:** Variables with the benchmark prefix referenced in tasks but never defined. |
