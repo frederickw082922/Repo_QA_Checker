@@ -14,6 +14,7 @@ calls to yamllint and ansible-lint.
 
 import argparse
 import collections
+import concurrent.futures
 import datetime
 import html as html_mod
 import json
@@ -23,12 +24,13 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.1.0"
+TOOL_VERSION = "2.2.0"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -135,7 +137,11 @@ MISSPELLING_DICT: Dict[str, str] = {
 
 # Words that look like misspelling-dict hits but are valid in this context.
 # Merged into SpellCheck at runtime alongside config spelling_exceptions.
-SPELL_EXCEPTIONS: Set[str] = set()  # add entries here to suppress globally
+SPELL_EXCEPTIONS: Set[str] = {
+    "nftables", "tmpfiles", "logrotate", "systemctl", "chrony",
+    "sshd", "grub", "auditd", "rsyslog", "journald", "coredump",
+    "sudo", "polkit", "fstab", "sysctl", "modprobe",
+}
 
 # Compiled grammar patterns: (regex, description_template, severity)
 GRAMMAR_PATTERNS: List[Tuple[re.Pattern, str, str]] = [
@@ -317,6 +323,19 @@ def _parse_simple_yaml(filepath: str) -> Dict[str, Any]:
 # Configuration loader
 # ---------------------------------------------------------------------------
 
+def _load_yaml_file(path: str) -> Dict[str, Any]:
+    """Load a YAML file, using PyYAML if available, falling back to the
+    built-in simple parser."""
+    try:
+        import yaml  # type: ignore[import-untyped]
+        with open(path, "r", encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+    except ImportError:
+        return _parse_simple_yaml(path)
+    except Exception:
+        return _parse_simple_yaml(path)
+
+
 class ConfigLoader:
     """Load per-repo configuration from .qa_config.yml."""
 
@@ -346,7 +365,7 @@ class ConfigLoader:
                 except (OSError, json.JSONDecodeError):
                     continue
             else:
-                loaded = _parse_simple_yaml(path)
+                loaded = _load_yaml_file(path)
             for key in cls.DEFAULTS:
                 if key in loaded:
                     config[key] = loaded[key]
@@ -371,37 +390,46 @@ class RepoScanner:
         self.exclude_paths = exclude_paths or set()  # absolute paths
         self._file_cache: Dict[str, List[str]] = {}
         self._files_cache: Dict[str, List[str]] = {}
+        self._cache_lock = threading.Lock()
         self.benchmark_prefix = benchmark_prefix or self._auto_detect_prefix()
 
     # -- file cache ---------------------------------------------------------
 
     def read_lines(self, filepath: str) -> List[str]:
-        """Read a file and return lines (cached)."""
-        if filepath not in self._file_cache:
-            try:
-                with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
-                    self._file_cache[filepath] = fh.readlines()
-            except OSError:
-                self._file_cache[filepath] = []
-        return self._file_cache[filepath]
+        """Read a file and return lines (thread-safe cached)."""
+        with self._cache_lock:
+            if filepath in self._file_cache:
+                return self._file_cache[filepath]
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+        except OSError:
+            lines = []
+        with self._cache_lock:
+            self._file_cache.setdefault(filepath, lines)
+            return self._file_cache[filepath]
 
     def collect_files(self, directory: str, extensions: Set[str],
                       exclude_dirs: Optional[Set[str]] = None) -> List[str]:
-        """Walk *directory* and return files with matching suffix (cached)."""
+        """Walk *directory* and return files with matching suffix (thread-safe cached)."""
         cache_key = f"{directory}|{'|'.join(sorted(extensions))}"
-        if cache_key not in self._files_cache:
-            if exclude_dirs is None:
-                exclude_dirs = SKIP_DIRS
-            result: List[str] = []
-            for root, dirs, files in os.walk(directory):
-                dirs[:] = [d for d in dirs if d not in exclude_dirs]
-                for fname in files:
-                    if any(fname.endswith(ext) for ext in extensions):
-                        fp = os.path.join(root, fname)
-                        if os.path.abspath(fp) not in self.exclude_paths:
-                            result.append(fp)
-            self._files_cache[cache_key] = sorted(result)
-        return self._files_cache[cache_key]
+        with self._cache_lock:
+            if cache_key in self._files_cache:
+                return self._files_cache[cache_key]
+        if exclude_dirs is None:
+            exclude_dirs = SKIP_DIRS
+        result: List[str] = []
+        for root, dirs, files in os.walk(directory):
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+            for fname in files:
+                if any(fname.endswith(ext) for ext in extensions):
+                    fp = os.path.join(root, fname)
+                    if os.path.abspath(fp) not in self.exclude_paths:
+                        result.append(fp)
+        sorted_result = sorted(result)
+        with self._cache_lock:
+            self._files_cache.setdefault(cache_key, sorted_result)
+            return self._files_cache[cache_key]
 
     # -- metadata helpers ---------------------------------------------------
 
@@ -496,8 +524,6 @@ class RepoScanner:
         self, checks: List[Tuple[str, type]],
     ) -> Dict[str, CheckResult]:
         """Run subprocess-based checks concurrently using threads."""
-        import concurrent.futures
-
         eligible = [
             (name, cls) for name, cls in checks
             if name in self._SUBPROCESS_CHECKS and name not in self.skip_checks
@@ -1082,7 +1108,7 @@ class CompanyNamingCheck:
             "|".join(re.escape(n) for n in old_names),
             re.IGNORECASE)
         exclude_files = {"README.md", "CONTRIBUTING.rst", "LICENSE",
-                         "Ansible-Lockdown_QA_Repo_Check.py"}
+                         os.path.basename(__file__)}
         files = self.scanner.collect_files(self.scanner.directory,
                                            {".yml", ".yaml", ".j2", ".md", ".py", ".sh"})
         for fp in files:
@@ -1372,11 +1398,11 @@ class ReportGenerator:
             for f in filtered[:200]:
                 sev_cls = f"severity-{f.severity}"
                 rows += (
-                    f"<tr><td><span class='{sev_cls}'>{esc(f.severity)}"
+                    f"<tr><td><span class='{sev_cls}'>{_html_escape(f.severity)}"
                     f"</span></td>"
-                    f"<td><code>{esc(f.file)}</code></td>"
+                    f"<td><code>{_html_escape(f.file)}</code></td>"
                     f"<td>{f.line}</td>"
-                    f"<td>{esc(f.description)}</td></tr>\n")
+                    f"<td>{_html_escape(f.description)}</td></tr>\n")
             if len(filtered) > 200:
                 rows += (
                     f"<tr><td colspan='4'><em>"
@@ -1391,16 +1417,16 @@ class ReportGenerator:
             sections.append(
                 f"<div class='section'>"
                 f"<div class='section-header'>"
-                f"<h2>{esc(r.name)}</h2>"
+                f"<h2>{_html_escape(r.name)}</h2>"
                 f"<span class='badge {badge_cls}'>{r.status}</span></div>"
-                f"<p>{esc(r.summary)}</p>{table}</div>\n")
+                f"<p>{_html_escape(r.summary)}</p>{table}</div>\n")
 
         return HTML_TEMPLATE.format(
-            repo_name=esc(self.meta.repo_name),
-            date=esc(self.meta.date),
-            branch=esc(self.meta.branch),
-            tool_version=esc(self.meta.tool_version),
-            benchmark_prefix=esc(self.meta.benchmark_prefix),
+            repo_name=_html_escape(self.meta.repo_name),
+            date=_html_escape(self.meta.date),
+            branch=_html_escape(self.meta.branch),
+            tool_version=_html_escape(self.meta.tool_version),
+            benchmark_prefix=_html_escape(self.meta.benchmark_prefix),
             total=s["total"], passed=s["passed"], failed=s["failed"],
             warnings=s["warnings"], skipped=s["skipped"],
             sections="\n".join(sections))
@@ -1441,7 +1467,7 @@ class ReportGenerator:
         return json.dumps(data, indent=2) + "\n"
 
 
-def esc(text: str) -> str:
+def _html_escape(text: str) -> str:
     """HTML-escape."""
     return html_mod.escape(str(text))
 
@@ -1558,12 +1584,15 @@ class AutoFixer:
 
     FIXABLE_CHECKS = {"spelling", "file_mode", "fqcn"}
 
-    def __init__(self, scanner: RepoScanner, results: List[CheckResult]):
+    def __init__(self, scanner: RepoScanner, results: List[CheckResult],
+                 dry_run: bool = False):
         self.scanner = scanner
         self.results = results
+        self.dry_run = dry_run
 
     def fix_all(self) -> int:
-        """Apply all auto-fixes. Returns count of fixes applied."""
+        """Apply all auto-fixes. Returns count of fixes applied (or would-be
+        applied in dry-run mode)."""
         # Group fixable findings by absolute file path
         by_file: Dict[str, List[Finding]] = defaultdict(list)
         for r in self.results:
@@ -1589,12 +1618,18 @@ class AutoFixer:
                     continue
                 new_line = self._apply_fix(lines[idx], finding)
                 if new_line != lines[idx]:
-                    lines[idx] = new_line
-                    modified = True
+                    if self.dry_run:
+                        rel = _relpath(abs_path, self.scanner.directory)
+                        print(f"  {rel}:{finding.line}: "
+                              f"{lines[idx].rstrip()} -> {new_line.rstrip()}",
+                              file=sys.stderr)
+                    else:
+                        lines[idx] = new_line
+                        modified = True
                     fixes_applied += 1
                     fixed_lines.add(idx)
 
-            if modified:
+            if modified and not self.dry_run:
                 with open(abs_path, "w", encoding="utf-8") as fh:
                     fh.writelines(lines)
                 # Invalidate cache for this file
@@ -1720,7 +1755,12 @@ def _resolve_directory(user_dir: Optional[str]) -> str:
       3. The current working directory.
     """
     if user_dir is not None:
-        return os.path.abspath(user_dir)
+        resolved = os.path.abspath(user_dir)
+        if not os.path.isdir(resolved):
+            print(f"Error: '{resolved}' is not a valid directory.",
+                  file=sys.stderr)
+            sys.exit(1)
+        return resolved
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if os.path.isfile(os.path.join(script_dir, "defaults", "main.yml")):
         return script_dir
@@ -1738,7 +1778,9 @@ def parse_args() -> argparse.Namespace:
               python3 Ansible-Lockdown_QA_Repo_Check.py -b rhel9cis -f html
               python3 Ansible-Lockdown_QA_Repo_Check.py --skip spelling,grammar --console
               python3 Ansible-Lockdown_QA_Repo_Check.py -d /path/to/role --verbose
+              python3 Ansible-Lockdown_QA_Repo_Check.py --only fqcn,spelling --console
               python3 Ansible-Lockdown_QA_Repo_Check.py --fix --console
+              python3 Ansible-Lockdown_QA_Repo_Check.py --fix --dry-run --console
               python3 Ansible-Lockdown_QA_Repo_Check.py --save-baseline baseline.json
               python3 Ansible-Lockdown_QA_Repo_Check.py --baseline baseline.json --console
               python3 Ansible-Lockdown_QA_Repo_Check.py --min-severity warning -f json
@@ -1765,12 +1807,16 @@ def parse_args() -> argparse.Namespace:
                         help="Repository directory (default: script location or cwd)")
     parser.add_argument("--skip", default="",
                         help="Comma-separated checks to skip")
+    parser.add_argument("--only", default="",
+                        help="Comma-separated checks to run (skip all others)")
     parser.add_argument("--min-severity",
                         choices=["info", "warning", "error"],
                         default=None,
                         help="Minimum severity to include in reports (default: info)")
     parser.add_argument("--fix", action="store_true",
                         help="Auto-fix spelling, file mode quoting, and FQCN issues")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Preview auto-fix changes without modifying files")
     parser.add_argument("--save-baseline", default=None, metavar="FILE",
                         help="Save current findings as a baseline JSON file")
     parser.add_argument("--baseline", default=None, metavar="FILE",
@@ -1806,6 +1852,16 @@ def main() -> None:
     skip = {s.strip().lower() for s in args.skip.split(",") if s.strip()}
     skip |= set(config.get("skip_checks", []))
 
+    # --only: invert into skip set (run only the named checks)
+    if args.only:
+        all_check_names = {
+            "yamllint", "ansiblelint", "spelling", "grammar", "unused_vars",
+            "var_naming", "file_mode", "company_naming", "audit_template",
+            "fqcn", "rule_coverage",
+        }
+        only = {s.strip().lower() for s in args.only.split(",") if s.strip()}
+        skip |= all_check_names - only
+
     min_severity = args.min_severity or config.get("min_severity", "info")
 
     # Determine output file to exclude from scanning
@@ -1836,12 +1892,16 @@ def main() -> None:
     results = scanner.run_all_checks()
 
     # Auto-fix
-    if args.fix:
-        fixer = AutoFixer(scanner, results)
+    if args.fix or args.dry_run:
+        fixer = AutoFixer(scanner, results, dry_run=args.dry_run)
         count = fixer.fix_all()
-        print(f"Auto-fix: {count} issue(s) fixed.", file=sys.stderr)
-        if count > 0:
-            print("Re-run the tool to verify fixes.", file=sys.stderr)
+        if args.dry_run:
+            print(f"Dry-run: {count} issue(s) would be fixed.",
+                  file=sys.stderr)
+        else:
+            print(f"Auto-fix: {count} issue(s) fixed.", file=sys.stderr)
+            if count > 0:
+                print("Re-run the tool to verify fixes.", file=sys.stderr)
 
     # Save baseline before delta filtering
     if args.save_baseline:
@@ -1879,8 +1939,20 @@ def main() -> None:
             fh.write(report)
         print(f"Report written to: {output_path}")
 
-    has_errors = any(r.status == "FAIL" for r in display_results)
-    has_warnings = any(r.status == "WARN" for r in display_results)
+    # In baseline mode, recalculate status based on remaining findings
+    # rather than the original check status which may reflect filtered-out issues.
+    if args.baseline:
+        has_errors = any(
+            any(f.severity == "error" for f in r.findings)
+            for r in display_results
+        )
+        has_warnings = any(
+            r.findings for r in display_results
+            if r.status not in ("PASS", "SKIP")
+        )
+    else:
+        has_errors = any(r.status == "FAIL" for r in display_results)
+        has_warnings = any(r.status == "WARN" for r in display_results)
     if has_errors:
         sys.exit(2)
     if has_warnings and args.strict:

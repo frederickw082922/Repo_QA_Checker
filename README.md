@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.1.0
+**Version:** 2.2.0
 
 ---
 
@@ -20,6 +20,7 @@ Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/a
 - [Exit Codes](#exit-codes)
 - [CI/CD Integration](#cicd-integration)
 - [Examples](#examples)
+- [Development](#development)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -48,6 +49,7 @@ Key features:
 | `yamllint` | Optional | Install via `pip install yamllint` -- check is skipped if not found |
 | `ansible-lint` | Optional | Install via `pip install ansible-lint` -- check is skipped if not found |
 | `git` | Optional | Used to detect the current branch for report metadata |
+| `PyYAML` | Optional | If installed, used for config parsing; otherwise falls back to built-in parser |
 
 ---
 
@@ -91,8 +93,10 @@ python3 Ansible-Lockdown_QA_Repo_Check.py [OPTIONS]
 | `--output PATH` | `-o` | Report output file path | `qa_report.{format}` |
 | `--directory PATH` | `-d` | Repository directory | Script location or cwd |
 | `--skip CHECKS` | | Comma-separated checks to skip | None |
+| `--only CHECKS` | | Comma-separated checks to run (skip all others) | None |
 | `--min-severity {info,warning,error}` | | Minimum severity to include in reports | `info` |
 | `--fix` | | Auto-fix spelling, file mode quoting, and FQCN issues | Off |
+| `--dry-run` | | Preview auto-fix changes without modifying files | Off |
 | `--save-baseline FILE` | | Save current findings as a baseline JSON file | None |
 | `--baseline FILE` | | Compare against baseline, show only new findings | None |
 | `--no-report` | | Skip writing a report file (console-only mode) | Off |
@@ -100,6 +104,17 @@ python3 Ansible-Lockdown_QA_Repo_Check.py [OPTIONS]
 | `--verbose` | | Show per-check timing and progress on stderr | Off |
 | `--console` | | Print colored results to terminal | Off |
 | `--version` | | Show tool version and exit | |
+| `--help` | `-h` | Show help message with all options, examples, and exit codes | |
+
+### Built-in Help
+
+Run `--help` to see the full usage summary directly in your terminal:
+
+```bash
+python3 Ansible-Lockdown_QA_Repo_Check.py --help
+```
+
+This displays all available flags, usage examples, valid check names for `--skip` / `--only`, and exit code definitions.
 
 ### Directory Resolution
 
@@ -138,6 +153,18 @@ python3 Ansible-Lockdown_QA_Repo_Check.py --skip spelling,grammar --console --no
 
 # Skip external linters (useful when yamllint/ansible-lint are not installed)
 python3 Ansible-Lockdown_QA_Repo_Check.py --skip yamllint,ansiblelint --console --no-report
+```
+
+### Running Specific Checks
+
+Use `--only` to run only the named checks (all others are skipped):
+
+```bash
+# Run only FQCN and spelling checks
+python3 Ansible-Lockdown_QA_Repo_Check.py --only fqcn,spelling --console --no-report
+
+# Run only rule coverage
+python3 Ansible-Lockdown_QA_Repo_Check.py --only rule_coverage --console --no-report
 ```
 
 ### Severity Levels
@@ -212,10 +239,25 @@ The `--fix` flag automatically corrects certain findings in place:
 | File Mode Quoting | Bare `mode: 0644` becomes `mode: '0644'` |
 | FQCN | Bare `command:` becomes `ansible.builtin.command:` |
 
-```bash
-# Preview findings first
-python3 Ansible-Lockdown_QA_Repo_Check.py --console --no-report
+### Dry-run preview
 
+Use `--dry-run` to see what would be changed without modifying any files:
+
+```bash
+python3 Ansible-Lockdown_QA_Repo_Check.py --dry-run --console --no-report
+```
+
+Output shows each proposed change on stderr:
+
+```
+  tasks/main.yml:23:     mode: 0600 ->     mode: '0600'
+  tasks/main.yml:12:   debug: ->   ansible.builtin.debug:
+Dry-run: 2 issue(s) would be fixed.
+```
+
+### Apply fixes
+
+```bash
 # Apply fixes
 python3 Ansible-Lockdown_QA_Repo_Check.py --fix --console --no-report
 
@@ -470,6 +512,18 @@ python3 Ansible-Lockdown_QA_Repo_Check.py -d /path/to/Ubuntu2204-CIS --console -
 python3 Ansible-Lockdown_QA_Repo_Check.py -b ubuntu2204cis --console --no-report
 ```
 
+### Run only specific checks
+
+```bash
+python3 Ansible-Lockdown_QA_Repo_Check.py --only fqcn,spelling --console --no-report
+```
+
+### Dry-run auto-fix (preview only)
+
+```bash
+python3 Ansible-Lockdown_QA_Repo_Check.py --dry-run --console --no-report
+```
+
 ### Auto-fix then verify
 
 ```bash
@@ -486,6 +540,42 @@ python3 Ansible-Lockdown_QA_Repo_Check.py --save-baseline baseline.json --no-rep
 
 # After making changes, check for new issues
 python3 Ansible-Lockdown_QA_Repo_Check.py --baseline baseline.json --console --no-report
+```
+
+---
+
+## Development
+
+### Linting
+
+The project uses [ruff](https://docs.astral.sh/ruff/) for linting and formatting. Configuration is in `pyproject.toml`.
+
+```bash
+pip install ruff
+
+# Check for issues
+ruff check .
+
+# Auto-fix lint issues
+ruff check --fix .
+
+# Format code
+ruff format .
+```
+
+### Installing as a Package
+
+```bash
+pip install .
+
+# Or with optional linter dependencies
+pip install ".[lint]"
+
+# Or with dev dependencies (pytest, ruff)
+pip install ".[dev]"
+
+# Then run from anywhere
+ansible-lockdown-qa -d /path/to/role --console --no-report
 ```
 
 ---
