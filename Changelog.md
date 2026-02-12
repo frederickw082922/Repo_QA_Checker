@@ -4,7 +4,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
-## 2.2.0 - Unreleased
+## 2.2.0
 
 ### Added
 

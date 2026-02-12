@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.1.0
+**Version:** 2.2.0
 
 ---
 
@@ -545,51 +545,6 @@ python3 Ansible-Lockdown_QA_Repo_Check.py --baseline baseline.json --console --n
 ---
 
 ## Development
-
-### Project Structure
-
-```
-Repo_QA_Checker/
-├── Ansible-Lockdown_QA_Repo_Check.py   # Main tool (single-file)
-├── README.md                            # This file
-├── LICENSE                              # MIT License
-├── pyproject.toml                       # Packaging, pytest, and ruff config
-├── .gitignore
-└── tests/
-    ├── conftest.py                      # Shared pytest fixtures
-    ├── fixtures/
-    │   ├── sample_role/                 # Fixture with known issues
-    │   └── clean_role/                  # Fixture that passes all checks
-    ├── test_scanner.py                  # RepoScanner, prefix detection, caching
-    ├── test_checks.py                   # All 11 check classes
-    ├── test_config.py                   # YAML parser and ConfigLoader
-    ├── test_reports.py                  # Markdown, HTML, JSON report generators
-    ├── test_baseline.py                 # Baseline save/load/delta
-    ├── test_autofixer.py                # Auto-fixer (dry-run and apply)
-    ├── test_cli.py                      # CLI argument parsing, --only flag
-    └── test_utilities.py                # Helper functions
-```
-
-### Running Tests
-
-```bash
-# Create a virtual environment (one-time setup)
-python3 -m venv .venv
-source .venv/bin/activate
-pip install pytest
-
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run a specific test file
-pytest tests/test_checks.py
-
-# Run a specific test class or method
-pytest tests/test_checks.py::TestSpellCheck::test_finds_misspellings
-```
 
 ### Linting
 
