@@ -1,0 +1,60 @@
+[project]
+name = "ansible-lockdown-qa-check"
+version = "2.1.0"
+description = "Comprehensive QA tool for Ansible-Lockdown CIS/STIG hardening roles"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+authors = [
+    { name = "Frederick Witty" },
+]
+keywords = ["ansible", "lockdown", "cis", "stig", "qa", "linting"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.scripts]
+ansible-lockdown-qa = "Ansible_Lockdown_QA_Repo_Check:main"
+
+[project.optional-dependencies]
+lint = ["yamllint", "ansible-lint"]
+dev = ["pytest", "pytest-tmp-files", "ruff"]
+
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "BLE",  # flake8-blind-except
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "BLE001", # blind exception (intentional in check runners)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
