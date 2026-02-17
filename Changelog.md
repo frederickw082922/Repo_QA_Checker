@@ -4,6 +4,33 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.3.0
+
+### Added
+
+- **pre-commit hook support:** Added `.pre-commit-hooks.yaml` with an `ansible-lockdown-qa` hook entry, allowing consumers to run QA checks automatically on every commit via [pre-commit](https://pre-commit.com/)
+- README: new "pre-commit Integration" section with consumer usage snippets, argument overrides, `additional_dependencies` for linters, and local testing instructions
+
+---
+
+## 2.2.1
+
+### Fixed
+
+- **Ansible Lint integration:** Changed `-f parsable` to `-f pep8` (parsable is not a valid ansible-lint format option)
+- **Ansible Lint parser:** Rewrote output regex to match modern ansible-lint pep8 format (`file:line:col: rule: message`) instead of legacy `[rule]` bracket format
+- **Ansible Lint parser:** Added `--nocolor` flag and ANSI escape code stripping to prevent color codes from breaking output parsing
+- **FQCN auto-fixer:** Fixed regex to handle both `module:` and `- module:` list-item syntax (previously silently failed on unnamed tasks)
+- **Unused variables reverse check:** Added guard for empty benchmark prefix to prevent false positives matching all underscore-prefixed identifiers
+
+### Changed
+
+- Consolidated `import collections` and `from collections import defaultdict` into a single `from collections import Counter, defaultdict` import
+- Added missing Ansible task keywords (`action`, `local_action`, `debugger`) to `TASK_KEYWORDS` set to prevent false positives in FQCN checking
+- Updated README to reflect `ansible-lint -f pep8` format flag
+
+---
+
 ## 2.2.0
 
 ### Added

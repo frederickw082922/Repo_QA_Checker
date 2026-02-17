@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.2.0
+**Version:** 2.3.0
 
 ---
 
@@ -18,6 +18,7 @@ Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/a
 - [Baseline / Delta Mode](#baseline--delta-mode)
 - [Configuration File](#configuration-file)
 - [Exit Codes](#exit-codes)
+- [pre-commit Integration](#pre-commit-integration)
 - [CI/CD Integration](#cicd-integration)
 - [Examples](#examples)
 - [Development](#development)
@@ -132,7 +133,7 @@ The tool runs 11 independent checks. Each produces a status of **PASS**, **FAIL*
 | # | Check Name | `--skip` Key | What It Does |
 |---|-----------|--------------|--------------|
 | 1 | **YAML Lint** | `yamllint` | Runs `yamllint -f parsable` against all YAML files. Skipped if `yamllint` is not installed. |
-| 2 | **Ansible Lint** | `ansiblelint` | Runs `ansible-lint -f parsable`. Skipped if `ansible-lint` is not installed. |
+| 2 | **Ansible Lint** | `ansiblelint` | Runs `ansible-lint -f pep8`. Skipped if `ansible-lint` is not installed. |
 | 3 | **Spell Check** | `spelling` | Scans comments and task `name:` fields for ~130 common misspellings. |
 | 4 | **Grammar Check** | `grammar` | Detects repeated words, double spaces, missing apostrophes, and subject-verb disagreement in comments and task names. |
 | 5 | **Unused Variables** | `unused_vars` | **Forward:** Variables defined in `defaults/main.yml` or `vars/` but never referenced. **Reverse:** Variables with the benchmark prefix referenced in tasks but never defined. |
@@ -397,6 +398,59 @@ python3 Ansible-Lockdown_QA_Repo_Check.py --strict --console --no-report
 - Exit `0` only when all checks are PASS or SKIP
 - Exit `1` if any check has WARN status
 - Exit `2` if any check has FAIL status
+
+---
+
+## pre-commit Integration
+
+This tool can be used as a [pre-commit](https://pre-commit.com/) hook so QA checks run automatically on every commit or in CI via `pre-commit run --all-files`.
+
+### Basic Usage
+
+Add the following to your Ansible role's `.pre-commit-config.yaml`:
+
+```yaml
+- repo: https://github.com/ansible-lockdown/Repo_QA_Checker
+  rev: v2.3.0  # pin to a release tag
+  hooks:
+    - id: ansible-lockdown-qa
+```
+
+The hook runs with sensible defaults: `-d . --strict --console --no-report`. It operates on the entire role directory (not individual files) and exits non-zero on warnings or errors.
+
+### Overriding Default Arguments
+
+You can override the default `args` in your `.pre-commit-config.yaml`:
+
+```yaml
+- repo: https://github.com/ansible-lockdown/Repo_QA_Checker
+  rev: v2.3.0
+  hooks:
+    - id: ansible-lockdown-qa
+      args: ['-d', '.', '--console', '--no-report', '--skip', 'grammar']
+```
+
+### Adding Linter Dependencies
+
+By default, the `yamllint` and `ansible-lint` checks are skipped gracefully when those tools are not installed. To include them, add `additional_dependencies`:
+
+```yaml
+- repo: https://github.com/ansible-lockdown/Repo_QA_Checker
+  rev: v2.3.0
+  hooks:
+    - id: ansible-lockdown-qa
+      additional_dependencies: ['yamllint', 'ansible-lint']
+```
+
+### Testing Locally
+
+```bash
+# Test the hook against your role without installing it permanently
+cd /path/to/your-ansible-role
+pre-commit try-repo /path/to/Repo_QA_Checker ansible-lockdown-qa --all-files
+```
+
+> **Note:** The `-d .` argument is required when running as a hook. pre-commit sets the working directory to the consumer's repo root, and without `-d .` the tool would look for role files in its own cached install directory.
 
 ---
 

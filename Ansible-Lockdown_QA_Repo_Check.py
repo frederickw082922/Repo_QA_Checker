@@ -13,7 +13,6 @@ calls to yamllint and ansible-lint.
 """
 
 import argparse
-import collections
 import concurrent.futures
 import datetime
 import html as html_mod
@@ -26,11 +25,11 @@ import sys
 import textwrap
 import threading
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.2.0"
+TOOL_VERSION = "2.3.0"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -228,6 +227,7 @@ TASK_KEYWORDS: Set[str] = {
     "any_errors_fatal", "throttle", "timeout", "collections",
     "module_defaults", "run_once", "delegate_to", "delegate_facts",
     "connection", "args", "async", "poll",
+    "action", "local_action", "debugger",
 }
 
 # Directories / patterns to skip when walking the repo
@@ -441,7 +441,7 @@ class RepoScanner:
         naturally accumulate more votes, producing the common root prefix.
         """
         defaults = os.path.join(self.directory, "defaults", "main.yml")
-        counter: collections.Counter = collections.Counter()
+        counter: Counter = Counter()
         for line in self.read_lines(defaults):
             s = line.rstrip()
             if not s or s.startswith("#") or s[0] in (" ", "\t"):
@@ -620,7 +620,7 @@ class AnsibleLintCheck:
                                summary="ansible-lint not installed")
         try:
             r = subprocess.run(
-                ["ansible-lint", "-f", "parsable"],
+                ["ansible-lint", "--nocolor", "-f", "pep8"],
                 capture_output=True, text=True,
                 cwd=self.scanner.directory, timeout=300)
         except subprocess.TimeoutExpired:
@@ -631,16 +631,29 @@ class AnsibleLintCheck:
         return CheckResult(self.display_name, status, findings,
                            f"{len(findings)} issue(s)")
 
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        """Remove ANSI escape sequences from text."""
+        return re.sub(r"\033\[[0-9;]*m", "", text)
+
     def _parse(self, output: str) -> List[Finding]:
         findings: List[Finding] = []
-        pat = re.compile(r"^(.+?):(\d+)(?::\d+)?: \[([^\]]+)\] (.+)$")
+        output = self._strip_ansi(output)
+        # Modern ansible-lint pep8 format:
+        #   file:line:col: rule[subrule]: message
+        #   file:line: rule: message
+        pat = re.compile(r"^(.+?):(\d+)(?::\d+)?: (\S+?):\s+(.+)$")
         for line in output.splitlines():
             m = pat.match(line)
             if m:
+                rule = m.group(3)
+                # Skip summary/metadata lines that aren't actual findings
+                if rule.startswith("Read") or rule.startswith("Failed"):
+                    continue
                 findings.append(Finding(
                     file=m.group(1),
                     line=int(m.group(2)),
-                    description=f"[{m.group(3)}] {m.group(4)}",
+                    description=f"[{rule}] {m.group(4)}",
                     severity="warning",
                     check_name="ansiblelint"))
         return findings
@@ -825,6 +838,8 @@ class UnusedVarCheck:
                        ) -> List[Finding]:
         """Variables referenced in tasks/templates/handlers but not defined."""
         findings: List[Finding] = []
+        if not self.scanner.benchmark_prefix:
+            return findings
         prefix = self.scanner.benchmark_prefix + "_"
         search_dirs = ["tasks", "templates", "handlers"]
         refs: Dict[str, Tuple[str, int]] = {}
@@ -1678,9 +1693,9 @@ class AutoFixer:
             return line
         module = m.group(1)
         fqcn = f"ansible.builtin.{module}"
-        # Replace at the correct position (task-level key)
+        # Replace at the correct position (task-level key or list-item key)
         return re.sub(
-            r"^(\s+)" + re.escape(module) + r":",
+            r"^(\s+(?:- )?)" + re.escape(module) + r":",
             r"\1" + fqcn + ":",
             line, count=1)
 
