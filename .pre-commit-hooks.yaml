@@ -1,0 +1,10 @@
+---
+
+- id: ansible-lockdown-qa
+  name: Ansible Lockdown QA Check
+  entry: ansible-lockdown-qa
+  args: ['-d', '.', '--strict', '--console', '--no-report']
+  language: python
+  pass_filenames: false
+  always_run: true
+  stages: [pre-commit]

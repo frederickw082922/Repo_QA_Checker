@@ -4,6 +4,15 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.3.0
+
+### Added
+
+- **pre-commit hook support:** Added `.pre-commit-hooks.yaml` with an `ansible-lockdown-qa` hook entry, allowing consumers to run QA checks automatically on every commit via [pre-commit](https://pre-commit.com/)
+- README: new "pre-commit Integration" section with consumer usage snippets, argument overrides, `additional_dependencies` for linters, and local testing instructions
+
+---
+
 ## 2.2.1
 
 ### Fixed
