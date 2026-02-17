@@ -4,7 +4,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
-## 2.3.0
+## 2.4.0
 
 ### Added
 
@@ -14,6 +14,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 ### Fixed
 
 - **pyproject.toml:** Changed `license = "MIT"` (PEP 639 string) to `license = {text = "MIT"}` (PEP 621 table) and removed `License :: OSI Approved :: MIT License` classifier to fix build failures with newer setuptools
+- **Module naming:** Renamed `Ansible-Lockdown_QA_Repo_Check.py` to `Ansible_Lockdown_QA_Repo_Check.py` (hyphen to underscore) to fix `ModuleNotFoundError` when installed as a package via pip or pre-commit
 
 ---
 
