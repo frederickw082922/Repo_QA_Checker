@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.3.0
+**Version:** 2.4.0
 
 ---
 
@@ -28,7 +28,7 @@ Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/a
 
 ## Overview
 
-`Ansible-Lockdown_QA_Repo_Check.py` is a single-file Python tool that runs 11 quality checks against any Ansible-Lockdown role repository. It validates YAML syntax, Ansible best practices, spelling, grammar, variable usage, naming conventions, FQCN compliance, rule coverage, and more.
+`Ansible_Lockdown_QA_Repo_Check.py` is a single-file Python tool that runs 11 quality checks against any Ansible-Lockdown role repository. It validates YAML syntax, Ansible best practices, spelling, grammar, variable usage, naming conventions, FQCN compliance, rule coverage, and more.
 
 Key features:
 
@@ -60,19 +60,19 @@ Key features:
 
 ```bash
 cd /path/to/RHEL9-CIS
-python3 Ansible-Lockdown_QA_Repo_Check.py --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --console --no-report
 ```
 
 ### Run from anywhere (point to the role)
 
 ```bash
-python3 /path/to/Ansible-Lockdown_QA_Repo_Check.py -d /path/to/RHEL9-CIS --console
+python3 /path/to/Ansible_Lockdown_QA_Repo_Check.py -d /path/to/RHEL9-CIS --console
 ```
 
 ### Generate an HTML report
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py -f html
+python3 Ansible_Lockdown_QA_Repo_Check.py -f html
 ```
 
 This creates `qa_report.html` in the role directory.
@@ -82,7 +82,7 @@ This creates `qa_report.html` in the role directory.
 ## CLI Reference
 
 ```
-python3 Ansible-Lockdown_QA_Repo_Check.py [OPTIONS]
+python3 Ansible_Lockdown_QA_Repo_Check.py [OPTIONS]
 ```
 
 ### Options
@@ -112,7 +112,7 @@ python3 Ansible-Lockdown_QA_Repo_Check.py [OPTIONS]
 Run `--help` to see the full usage summary directly in your terminal:
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --help
+python3 Ansible_Lockdown_QA_Repo_Check.py --help
 ```
 
 This displays all available flags, usage examples, valid check names for `--skip` / `--only`, and exit code definitions.
@@ -150,10 +150,10 @@ Use `--skip` with a comma-separated list of check keys:
 
 ```bash
 # Skip spell and grammar checks
-python3 Ansible-Lockdown_QA_Repo_Check.py --skip spelling,grammar --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --skip spelling,grammar --console --no-report
 
 # Skip external linters (useful when yamllint/ansible-lint are not installed)
-python3 Ansible-Lockdown_QA_Repo_Check.py --skip yamllint,ansiblelint --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --skip yamllint,ansiblelint --console --no-report
 ```
 
 ### Running Specific Checks
@@ -162,10 +162,10 @@ Use `--only` to run only the named checks (all others are skipped):
 
 ```bash
 # Run only FQCN and spelling checks
-python3 Ansible-Lockdown_QA_Repo_Check.py --only fqcn,spelling --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --only fqcn,spelling --console --no-report
 
 # Run only rule coverage
-python3 Ansible-Lockdown_QA_Repo_Check.py --only rule_coverage --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --only rule_coverage --console --no-report
 ```
 
 ### Severity Levels
@@ -182,7 +182,7 @@ Filter findings with `--min-severity`:
 
 ```bash
 # Only show warnings and errors
-python3 Ansible-Lockdown_QA_Repo_Check.py --min-severity warning --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --min-severity warning --console --no-report
 ```
 
 ---
@@ -192,7 +192,7 @@ python3 Ansible-Lockdown_QA_Repo_Check.py --min-severity warning --console --no-
 ### Markdown (default)
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py -f md
+python3 Ansible_Lockdown_QA_Repo_Check.py -f md
 # Creates: qa_report.md
 ```
 
@@ -201,7 +201,7 @@ Generates a Markdown file with a summary table and per-check sections containing
 ### HTML
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py -f html
+python3 Ansible_Lockdown_QA_Repo_Check.py -f html
 # Creates: qa_report.html
 ```
 
@@ -210,7 +210,7 @@ Generates a styled HTML page with color-coded severity badges, suitable for view
 ### JSON
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py -f json
+python3 Ansible_Lockdown_QA_Repo_Check.py -f json
 # Creates: qa_report.json
 ```
 
@@ -219,13 +219,13 @@ Generates structured JSON output including metadata, summary counts, per-check e
 ### Custom Output Path
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py -f html -o /tmp/my_report.html
+python3 Ansible_Lockdown_QA_Repo_Check.py -f html -o /tmp/my_report.html
 ```
 
 ### Console Only (no file)
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --console --no-report
 ```
 
 ---
@@ -245,7 +245,7 @@ The `--fix` flag automatically corrects certain findings in place:
 Use `--dry-run` to see what would be changed without modifying any files:
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --dry-run --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --dry-run --console --no-report
 ```
 
 Output shows each proposed change on stderr:
@@ -260,10 +260,10 @@ Dry-run: 2 issue(s) would be fixed.
 
 ```bash
 # Apply fixes
-python3 Ansible-Lockdown_QA_Repo_Check.py --fix --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --fix --console --no-report
 
 # Re-run to verify
-python3 Ansible-Lockdown_QA_Repo_Check.py --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --console --no-report
 ```
 
 > **Note:** Always review the changes with `git diff` after running `--fix`. The tool modifies files in place.
@@ -277,7 +277,7 @@ Baseline mode lets you track only **new** findings relative to a known state. Th
 ### Save a baseline
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --save-baseline baseline.json --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --save-baseline baseline.json --no-report
 ```
 
 This creates `baseline.json` containing all current findings.
@@ -285,7 +285,7 @@ This creates `baseline.json` containing all current findings.
 ### Compare against a baseline
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --baseline baseline.json --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --baseline baseline.json --console --no-report
 ```
 
 Only findings **not present** in the baseline are shown. Existing findings are filtered out.
@@ -295,11 +295,11 @@ Only findings **not present** in the baseline are shown. Existing findings are f
 ```bash
 # On the main branch, save a baseline
 git checkout main
-python3 Ansible-Lockdown_QA_Repo_Check.py --save-baseline baseline.json --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --save-baseline baseline.json --no-report
 
 # On a feature branch, check for new issues only
 git checkout feature-branch
-python3 Ansible-Lockdown_QA_Repo_Check.py --baseline baseline.json --strict --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --baseline baseline.json --strict --console --no-report
 ```
 
 ---
@@ -392,7 +392,7 @@ If no config file is present, these defaults are used:
 ### Strict mode
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --strict --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --strict --console --no-report
 ```
 
 - Exit `0` only when all checks are PASS or SKIP
@@ -473,7 +473,7 @@ jobs:
 
       - name: Run QA checks
         run: |
-          python3 Ansible-Lockdown_QA_Repo_Check.py \
+          python3 Ansible_Lockdown_QA_Repo_Check.py \
             --strict \
             -f json \
             -o qa_report.json
@@ -491,7 +491,7 @@ jobs:
 ```yaml
       - name: Run QA checks (delta only)
         run: |
-          python3 Ansible-Lockdown_QA_Repo_Check.py \
+          python3 Ansible_Lockdown_QA_Repo_Check.py \
             --baseline baseline.json \
             --strict \
             --console \
@@ -505,7 +505,7 @@ qa-check:
   stage: test
   script:
     - pip install yamllint ansible-lint
-    - python3 Ansible-Lockdown_QA_Repo_Check.py --strict -f html -o qa_report.html
+    - python3 Ansible_Lockdown_QA_Repo_Check.py --strict -f html -o qa_report.html
   artifacts:
     when: always
     paths:
@@ -519,21 +519,21 @@ qa-check:
 ### Basic console check (no file output)
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --console --no-report
 ```
 
 ### Generate all report formats
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py -f md -o reports/qa.md
-python3 Ansible-Lockdown_QA_Repo_Check.py -f html -o reports/qa.html
-python3 Ansible-Lockdown_QA_Repo_Check.py -f json -o reports/qa.json
+python3 Ansible_Lockdown_QA_Repo_Check.py -f md -o reports/qa.md
+python3 Ansible_Lockdown_QA_Repo_Check.py -f html -o reports/qa.html
+python3 Ansible_Lockdown_QA_Repo_Check.py -f json -o reports/qa.json
 ```
 
 ### Verbose mode with timing
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --verbose --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --verbose --console --no-report
 ```
 
 Output includes per-check elapsed time:
@@ -551,38 +551,38 @@ Output includes per-check elapsed time:
 ### Only warnings and errors
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --min-severity warning --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --min-severity warning --console --no-report
 ```
 
 ### Run against a different repository
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py -d /path/to/Ubuntu2204-CIS --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py -d /path/to/Ubuntu2204-CIS --console --no-report
 ```
 
 ### Override auto-detected prefix
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py -b ubuntu2204cis --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py -b ubuntu2204cis --console --no-report
 ```
 
 ### Run only specific checks
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --only fqcn,spelling --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --only fqcn,spelling --console --no-report
 ```
 
 ### Dry-run auto-fix (preview only)
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --dry-run --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --dry-run --console --no-report
 ```
 
 ### Auto-fix then verify
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --fix --no-report
-python3 Ansible-Lockdown_QA_Repo_Check.py --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --fix --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --console --no-report
 git diff  # review changes
 ```
 
@@ -590,10 +590,10 @@ git diff  # review changes
 
 ```bash
 # Save current state
-python3 Ansible-Lockdown_QA_Repo_Check.py --save-baseline baseline.json --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --save-baseline baseline.json --no-report
 
 # After making changes, check for new issues
-python3 Ansible-Lockdown_QA_Repo_Check.py --baseline baseline.json --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --baseline baseline.json --console --no-report
 ```
 
 ---
@@ -667,7 +667,7 @@ If valid variables are being flagged:
 Double-space findings are `info` severity. Use `--min-severity warning` to suppress them, or skip the grammar check entirely:
 
 ```bash
-python3 Ansible-Lockdown_QA_Repo_Check.py --skip grammar --console --no-report
+python3 Ansible_Lockdown_QA_Repo_Check.py --skip grammar --console --no-report
 ```
 
 ### Console colors not displaying

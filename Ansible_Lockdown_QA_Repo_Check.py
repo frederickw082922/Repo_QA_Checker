@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.3.0"
+TOOL_VERSION = "2.4.0"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -1784,23 +1784,23 @@ def _resolve_directory(user_dir: Optional[str]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="Ansible-Lockdown_QA_Repo_Check",
+        prog="Ansible_Lockdown_QA_Repo_Check",
         description="Comprehensive QA tool for Ansible-Lockdown repositories.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             examples:
-              python3 Ansible-Lockdown_QA_Repo_Check.py
-              python3 Ansible-Lockdown_QA_Repo_Check.py -b rhel9cis -f html
-              python3 Ansible-Lockdown_QA_Repo_Check.py --skip spelling,grammar --console
-              python3 Ansible-Lockdown_QA_Repo_Check.py -d /path/to/role --verbose
-              python3 Ansible-Lockdown_QA_Repo_Check.py --only fqcn,spelling --console
-              python3 Ansible-Lockdown_QA_Repo_Check.py --fix --console
-              python3 Ansible-Lockdown_QA_Repo_Check.py --fix --dry-run --console
-              python3 Ansible-Lockdown_QA_Repo_Check.py --save-baseline baseline.json
-              python3 Ansible-Lockdown_QA_Repo_Check.py --baseline baseline.json --console
-              python3 Ansible-Lockdown_QA_Repo_Check.py --min-severity warning -f json
-              python3 Ansible-Lockdown_QA_Repo_Check.py --console --no-report
-              python3 Ansible-Lockdown_QA_Repo_Check.py --strict
+              python3 Ansible_Lockdown_QA_Repo_Check.py
+              python3 Ansible_Lockdown_QA_Repo_Check.py -b rhel9cis -f html
+              python3 Ansible_Lockdown_QA_Repo_Check.py --skip spelling,grammar --console
+              python3 Ansible_Lockdown_QA_Repo_Check.py -d /path/to/role --verbose
+              python3 Ansible_Lockdown_QA_Repo_Check.py --only fqcn,spelling --console
+              python3 Ansible_Lockdown_QA_Repo_Check.py --fix --console
+              python3 Ansible_Lockdown_QA_Repo_Check.py --fix --dry-run --console
+              python3 Ansible_Lockdown_QA_Repo_Check.py --save-baseline baseline.json
+              python3 Ansible_Lockdown_QA_Repo_Check.py --baseline baseline.json --console
+              python3 Ansible_Lockdown_QA_Repo_Check.py --min-severity warning -f json
+              python3 Ansible_Lockdown_QA_Repo_Check.py --console --no-report
+              python3 Ansible_Lockdown_QA_Repo_Check.py --strict
 
             check names for --skip:
               yamllint, ansiblelint, spelling, grammar, unused_vars,
