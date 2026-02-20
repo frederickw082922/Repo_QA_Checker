@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.4.0"
+TOOL_VERSION = "2.4.1"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -707,6 +707,7 @@ class GrammarCheck:
     display_name = "Grammar Check"
 
     _MD_SKIP_PATTERNS = {"Multiple consecutive spaces"}
+    _COMMENT_SKIP_PATTERNS = {"Multiple consecutive spaces"}
 
     def __init__(self, scanner: RepoScanner):
         self.scanner = scanner
@@ -719,22 +720,30 @@ class GrammarCheck:
             ext = os.path.splitext(fp)[1]
             rel = _relpath(fp, self.scanner.directory)
             is_md = ext == ".md"
+            if os.path.basename(fp) == "aide.conf.j2":
+                continue
             for num, raw_line in enumerate(self.scanner.read_lines(fp), 1):
                 # Check both comments and task name: values
-                texts = []
+                texts: List[Tuple[str, str]] = []
                 c = _extract_comment(raw_line, ext)
                 if c:
-                    texts.append(c)
+                    texts.append(("comment", c))
                 tn = _extract_task_name(raw_line, ext)
                 if tn:
-                    texts.append(tn)
+                    texts.append(("task_name", tn))
                 if not texts:
                     continue
-                for text in texts:
+                for source, text in texts:
                     if re.search(r"https?://", text):
                         continue
+                    is_aide = "aide" in text.lower()
                     for pat, desc_tmpl, sev in GRAMMAR_PATTERNS:
                         if is_md and desc_tmpl in self._MD_SKIP_PATTERNS:
+                            continue
+                        # Skip double-spacing in comments and AIDE content
+                        if source == "comment" and desc_tmpl in self._COMMENT_SKIP_PATTERNS:
+                            continue
+                        if is_aide and desc_tmpl in self._COMMENT_SKIP_PATTERNS:
                             continue
                         m = pat.search(text)
                         if m:
@@ -1740,21 +1749,25 @@ class BaselineManager:
         }
         new_results: List[CheckResult] = []
         for r in results:
+            if r.status == "SKIP":
+                new_results.append(r)
+                continue
             new_findings = [
                 f for f in r.findings
                 if (f.file, f.description) not in baseline_keys
             ]
             if new_findings:
+                has_errors = any(f.severity == "error" for f in new_findings)
+                status = "FAIL" if has_errors else "WARN"
                 new_results.append(CheckResult(
-                    name=r.name, status=r.status,
+                    name=r.name, status=status,
                     findings=new_findings,
                     summary=f"{len(new_findings)} new issue(s)"))
             else:
                 new_results.append(CheckResult(
-                    name=r.name, status=r.status,
+                    name=r.name, status="PASS",
                     findings=[],
-                    summary=r.summary if r.status in ("PASS", "SKIP")
-                            else "0 new issue(s)"))
+                    summary="0 new issue(s)" if r.findings else r.summary))
         return new_results
 
 # ---------------------------------------------------------------------------
@@ -1954,20 +1967,8 @@ def main() -> None:
             fh.write(report)
         print(f"Report written to: {output_path}")
 
-    # In baseline mode, recalculate status based on remaining findings
-    # rather than the original check status which may reflect filtered-out issues.
-    if args.baseline:
-        has_errors = any(
-            any(f.severity == "error" for f in r.findings)
-            for r in display_results
-        )
-        has_warnings = any(
-            r.findings for r in display_results
-            if r.status not in ("PASS", "SKIP")
-        )
-    else:
-        has_errors = any(r.status == "FAIL" for r in display_results)
-        has_warnings = any(r.status == "WARN" for r in display_results)
+    has_errors = any(r.status == "FAIL" for r in display_results)
+    has_warnings = any(r.status == "WARN" for r in display_results)
     if has_errors:
         sys.exit(2)
     if has_warnings and args.strict:

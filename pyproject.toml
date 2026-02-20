@@ -1,6 +1,6 @@
 [project]
 name = "ansible-lockdown-qa-check"
-version = "2.4.0"
+version = "2.4.1"
 description = "Comprehensive QA tool for Ansible-Lockdown CIS/STIG hardening roles"
 readme = "README.md"
 license = {text = "MIT"}
@@ -54,6 +54,3 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
