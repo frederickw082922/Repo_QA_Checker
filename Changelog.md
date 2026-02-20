@@ -10,6 +10,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 - **Grammar check:** Skip "Multiple consecutive spaces" detection in comment text (after `#`) — double spacing in comments is intentional formatting
 - **Grammar check:** Skip "Multiple consecutive spaces" detection in AIDE-related content where double spacing is expected
+- **Grammar check:** Skip `aide.conf.j2` entirely from grammar checking — AIDE config syntax triggers false positives (e.g. repeated words like `selinux selinux`)
 
 ---
 

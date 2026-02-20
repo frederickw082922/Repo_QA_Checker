@@ -720,6 +720,8 @@ class GrammarCheck:
             ext = os.path.splitext(fp)[1]
             rel = _relpath(fp, self.scanner.directory)
             is_md = ext == ".md"
+            if os.path.basename(fp) == "aide.conf.j2":
+                continue
             for num, raw_line in enumerate(self.scanner.read_lines(fp), 1):
                 # Check both comments and task name: values
                 texts: List[Tuple[str, str]] = []
