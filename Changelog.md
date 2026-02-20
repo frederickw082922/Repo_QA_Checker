@@ -4,7 +4,31 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.4.1
+
+### Fixed
+
+- **Grammar check:** Skip "Multiple consecutive spaces" detection in comment text (after `#`) — double spacing in comments is intentional formatting
+- **Grammar check:** Skip "Multiple consecutive spaces" detection in AIDE-related content where double spacing is expected
+
+---
+
 ## 2.4.0
+
+### Fixed
+
+- **Module naming:** Renamed `Ansible-Lockdown_QA_Repo_Check.py` to `Ansible_Lockdown_QA_Repo_Check.py` (hyphen to underscore) to fix `ModuleNotFoundError` when installed as a package via pip or pre-commit
+- **Baseline delta display:** `BaselineManager.delta()` now recalculates check status (PASS/FAIL/WARN) from remaining findings instead of preserving the original status, fixing misleading `FAIL (0 new issue(s))` output in console and reports
+- **README:** Updated pre-commit integration `rev:` references from `v2.3.0` to `v2.4.1`
+
+### Changed
+
+- Simplified exit code logic in `main()` — removed baseline-specific workaround now that `delta()` returns correct statuses
+- Removed stale `[tool.pytest.ini_options]` section from `pyproject.toml` (referenced non-existent `tests/` directory)
+
+---
+
+## 2.3.0
 
 ### Added
 
@@ -14,7 +38,6 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 ### Fixed
 
 - **pyproject.toml:** Changed `license = "MIT"` (PEP 639 string) to `license = {text = "MIT"}` (PEP 621 table) and removed `License :: OSI Approved :: MIT License` classifier to fix build failures with newer setuptools
-- **Module naming:** Renamed `Ansible-Lockdown_QA_Repo_Check.py` to `Ansible_Lockdown_QA_Repo_Check.py` (hyphen to underscore) to fix `ModuleNotFoundError` when installed as a package via pip or pre-commit
 
 ---
 
