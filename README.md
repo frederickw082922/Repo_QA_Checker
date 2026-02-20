@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.4.1
+**Version:** 2.4.2
 
 ---
 
@@ -103,6 +103,8 @@ python3 Ansible_Lockdown_QA_Repo_Check.py [OPTIONS]
 | `--no-report` | | Skip writing a report file (console-only mode) | Off |
 | `--strict` | | Exit 1 on warnings, exit 2 on errors | Off |
 | `--verbose` | | Show per-check timing and progress on stderr | Off |
+| `--progress` | | Show inline progress status during checks | Auto (TTY) |
+| `--no-progress` | | Disable progress status even on TTY | Off |
 | `--console` | | Print colored results to terminal | Off |
 | `--version` | | Show tool version and exit | |
 | `--help` | `-h` | Show help message with all options, examples, and exit codes | |
@@ -411,7 +413,7 @@ Add the following to your Ansible role's `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.4.1  # pin to a release tag
+  rev: v2.4.2  # pin to a release tag
   hooks:
     - id: ansible-lockdown-qa
 ```
@@ -424,7 +426,7 @@ You can override the default `args` in your `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.4.1
+  rev: v2.4.2
   hooks:
     - id: ansible-lockdown-qa
       args: ['-d', '.', '--console', '--no-report', '--skip', 'grammar']
@@ -436,7 +438,7 @@ By default, the `yamllint` and `ansible-lint` checks are skipped gracefully when
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.4.1
+  rev: v2.4.2
   hooks:
     - id: ansible-lockdown-qa
       additional_dependencies: ['yamllint', 'ansible-lint']
@@ -529,6 +531,22 @@ python3 Ansible_Lockdown_QA_Repo_Check.py -f md -o reports/qa.md
 python3 Ansible_Lockdown_QA_Repo_Check.py -f html -o reports/qa.html
 python3 Ansible_Lockdown_QA_Repo_Check.py -f json -o reports/qa.json
 ```
+
+### Progress status
+
+When running on an interactive terminal, the tool prints progress lines showing which check is running:
+
+```
+  [1/11] YAML Lint, Ansible Lint (parallel)...
+    YAML Lint done (1.03s)
+    Ansible Lint done (0.51s)
+  [3/11] Spell Check...
+  [4/11] Grammar Check...
+  [5/11] Unused Variables...
+  ...
+```
+
+Progress is automatically disabled when output is piped or in CI environments. Use `--no-progress` to disable it explicitly, or `--progress` to force it on.
 
 ### Verbose mode with timing
 

@@ -4,6 +4,20 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.4.2
+
+### Added
+
+- **Progress status:** Real-time progress reporting on stderr during check execution
+  - Check-level: `[3/11] Spell Check...` printed before each check starts
+  - Parallel lint checks show each tool as it completes with elapsed time
+  - Auto-enabled on interactive terminals (TTY), automatically disabled in CI/piped output
+  - Thread-safe `StatusLine` class for use during parallel lint checks
+- `--progress` flag: force progress status display on (even in non-TTY environments)
+- `--no-progress` flag: disable progress status (even on TTY)
+
+---
+
 ## 2.4.1
 
 ### Fixed

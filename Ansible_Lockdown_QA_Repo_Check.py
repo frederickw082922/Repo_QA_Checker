@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.4.1"
+TOOL_VERSION = "2.4.2"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -66,6 +66,32 @@ class ReportMetadata:
 # ---------------------------------------------------------------------------
 
 SEVERITY_LEVELS: Dict[str, int] = {"info": 0, "warning": 1, "error": 2}
+
+# ---------------------------------------------------------------------------
+# Status line -- inline progress on stderr
+# ---------------------------------------------------------------------------
+
+class StatusLine:
+    """Simple progress reporter on stderr.
+
+    Prints one-line status messages (not overwritten).
+    Automatically disabled when stderr is not a TTY (CI, piped output).
+    Thread-safe for parallel checks.
+    """
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled and sys.stderr.isatty()
+        self._lock = threading.Lock()
+
+    def update(self, msg: str) -> None:
+        """Print a status message to stderr."""
+        if not self.enabled:
+            return
+        with self._lock:
+            print(msg, file=sys.stderr)
+
+    def clear(self) -> None:
+        """No-op (kept for API compatibility)."""
 
 ANSI = {
     "red":    "\033[0;31m",
@@ -382,7 +408,8 @@ class RepoScanner:
     def __init__(self, directory: str, benchmark_prefix: Optional[str],
                  skip_checks: Set[str], verbose: bool,
                  config: Dict[str, Any],
-                 exclude_paths: Optional[Set[str]] = None):
+                 exclude_paths: Optional[Set[str]] = None,
+                 progress: bool = False):
         self.directory = directory
         self.verbose = verbose
         self.skip_checks = skip_checks
@@ -391,6 +418,7 @@ class RepoScanner:
         self._file_cache: Dict[str, List[str]] = {}
         self._files_cache: Dict[str, List[str]] = {}
         self._cache_lock = threading.Lock()
+        self.status = StatusLine(enabled=progress)
         self.benchmark_prefix = benchmark_prefix or self._auto_detect_prefix()
 
     # -- file cache ---------------------------------------------------------
@@ -488,10 +516,12 @@ class RepoScanner:
         ]
 
         # Phase 1: launch subprocess-based checks in parallel
-        parallel_results = self._run_parallel_checks(checks)
+        total = sum(1 for n, _ in checks if n not in self.skip_checks)
+        parallel_results = self._run_parallel_checks(checks, total)
 
         # Phase 2: run remaining checks sequentially
         results: List[CheckResult] = []
+        done = sum(1 for n in parallel_results)
         for name, cls in checks:
             if name in parallel_results:
                 results.append(parallel_results[name])
@@ -501,6 +531,8 @@ class RepoScanner:
                                            status="SKIP",
                                            summary="Skipped by user"))
                 continue
+            done += 1
+            self.status.update(f"  [{done}/{total}] {cls.display_name}...")
             if self.verbose:
                 print(f"  Running {name} ...", file=sys.stderr)
             t0 = time.monotonic()
@@ -521,7 +553,7 @@ class RepoScanner:
         return results
 
     def _run_parallel_checks(
-        self, checks: List[Tuple[str, type]],
+        self, checks: List[Tuple[str, type]], total: int,
     ) -> Dict[str, CheckResult]:
         """Run subprocess-based checks concurrently using threads."""
         eligible = [
@@ -531,7 +563,11 @@ class RepoScanner:
         if not eligible:
             return {}
 
+        names = ", ".join(cls.display_name for _, cls in eligible)
+        self.status.update(f"  [1/{total}] {names} (parallel)...")
+
         result_map: Dict[str, CheckResult] = {}
+        done_count = 0
 
         def _run_one(name: str, cls: type) -> Tuple[str, CheckResult]:
             if self.verbose:
@@ -561,6 +597,9 @@ class RepoScanner:
             for fut in concurrent.futures.as_completed(futures):
                 name, result = fut.result()
                 result_map[name] = result
+                done_count += 1
+                self.status.update(
+                    f"    {result.name} done ({result.elapsed:.2f}s)")
 
         return result_map
 
@@ -1855,6 +1894,10 @@ def parse_args() -> argparse.Namespace:
                         help="Exit 1 on warnings (WARN), exit 2 on errors (FAIL)")
     parser.add_argument("--verbose", action="store_true",
                         help="Verbose output during run")
+    parser.add_argument("--progress", action="store_true", default=None,
+                        help="Show inline progress status (auto-enabled on TTY)")
+    parser.add_argument("--no-progress", action="store_true",
+                        help="Disable progress status even on TTY")
     parser.add_argument("--console", action="store_true",
                         help="Print colored results to terminal")
     parser.add_argument("--version", action="version",
@@ -1902,8 +1945,12 @@ def main() -> None:
             output_path = os.path.join(directory, output_path)
     exclude_paths = {os.path.abspath(output_path)} if output_path else set()
 
+    # Progress: auto-enable on TTY unless explicitly disabled
+    show_progress = (not args.no_progress
+                     and (args.progress or sys.stderr.isatty()))
+
     scanner = RepoScanner(directory, args.benchmark, skip, args.verbose,
-                          config, exclude_paths)
+                          config, exclude_paths, progress=show_progress)
 
     metadata = ReportMetadata(
         repo_name=scanner.get_repo_name(),
