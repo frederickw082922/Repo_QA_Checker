@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.4.1"
+TOOL_VERSION = "2.5.0"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -60,12 +60,39 @@ class ReportMetadata:
     date: str
     tool_version: str
     benchmark_prefix: str
+    benchmark_version: str = ""
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 SEVERITY_LEVELS: Dict[str, int] = {"info": 0, "warning": 1, "error": 2}
+
+# ---------------------------------------------------------------------------
+# Status line -- inline progress on stderr
+# ---------------------------------------------------------------------------
+
+class StatusLine:
+    """Simple progress reporter on stderr.
+
+    Prints one-line status messages (not overwritten).
+    Automatically disabled when stderr is not a TTY (CI, piped output).
+    Thread-safe for parallel checks.
+    """
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled and sys.stderr.isatty()
+        self._lock = threading.Lock()
+
+    def update(self, msg: str) -> None:
+        """Print a status message to stderr."""
+        if not self.enabled:
+            return
+        with self._lock:
+            print(msg, file=sys.stderr)
+
+    def clear(self) -> None:
+        """No-op (kept for API compatibility)."""
 
 ANSI = {
     "red":    "\033[0;31m",
@@ -167,15 +194,15 @@ GRAMMAR_PATTERNS: List[Tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bcouldnt\b", re.IGNORECASE),
      "Missing apostrophe: 'couldnt' -> 'couldn't'", "info"),
     (re.compile(
-        r"\b(?:values|variables|files|settings|options|parameters|packages|modules"
+        r"\b(values|variables|files|settings|options|parameters|packages|modules"
         r"|controls|rules|entries|changes|updates|directories)\s+is\b",
         re.IGNORECASE),
-     "Subject-verb disagreement: plural noun + 'is'", "warning"),
+     "Subject-verb disagreement: '{0}' + 'is'", "warning"),
     (re.compile(
-        r"\b(?:variable|value|file|setting|option|parameter|package|module"
+        r"\b(variable|value|file|setting|option|parameter|package|module"
         r"|control|rule|entry|change|update|directory)\s+are\b",
         re.IGNORECASE),
-     "Subject-verb disagreement: singular noun + 'are'", "warning"),
+     "Subject-verb disagreement: '{0}' + 'are'", "warning"),
 ]
 
 # Register variable prefixes accepted by Ansible-Lockdown convention
@@ -245,6 +272,14 @@ def _relpath(filepath: str, base: str) -> str:
         return filepath
 
 
+_JINJA2_RE = re.compile(r"\{\{.*?\}\}")
+
+
+def _strip_jinja2(text: str) -> str:
+    """Remove Jinja2 {{ ... }} expressions from *text*."""
+    return _JINJA2_RE.sub("", text)
+
+
 def _extract_comment(line: str, file_ext: str) -> Optional[str]:
     """Return the comment text from *line*, or None if not a comment."""
     stripped = line.lstrip()
@@ -264,8 +299,9 @@ def _extract_task_name(line: str, file_ext: str) -> Optional[str]:
     m = re.match(r"\s*-?\s*name:\s*(.+)", line)
     if m:
         val = m.group(1).strip().strip("'\"")
-        # Skip Jinja expressions
-        if "{{" in val:
+        # Strip Jinja2 expressions and return remaining text
+        val = _strip_jinja2(val).strip()
+        if not val:
             return None
         return val
     return None
@@ -382,7 +418,8 @@ class RepoScanner:
     def __init__(self, directory: str, benchmark_prefix: Optional[str],
                  skip_checks: Set[str], verbose: bool,
                  config: Dict[str, Any],
-                 exclude_paths: Optional[Set[str]] = None):
+                 exclude_paths: Optional[Set[str]] = None,
+                 progress: bool = False):
         self.directory = directory
         self.verbose = verbose
         self.skip_checks = skip_checks
@@ -391,7 +428,9 @@ class RepoScanner:
         self._file_cache: Dict[str, List[str]] = {}
         self._files_cache: Dict[str, List[str]] = {}
         self._cache_lock = threading.Lock()
+        self.status = StatusLine(enabled=progress)
         self.benchmark_prefix = benchmark_prefix or self._auto_detect_prefix()
+        self.benchmark_type = self._detect_benchmark_type()
 
     # -- file cache ---------------------------------------------------------
 
@@ -467,6 +506,37 @@ class RepoScanner:
     def get_repo_name(self) -> str:
         return os.path.basename(os.path.abspath(self.directory))
 
+    def _detect_benchmark_type(self) -> str:
+        """Detect whether this is a CIS or STIG benchmark.
+
+        CIS benchmarks use '{prefix}_rule_{section}' variables.
+        STIG benchmarks use '{prefix}_{6digits}' variables.
+        """
+        if not self.benchmark_prefix:
+            return "cis"
+        defaults = os.path.join(self.directory, "defaults", "main.yml")
+        rule_pat = re.compile(rf"^{re.escape(self.benchmark_prefix)}_rule_\d")
+        stig_pat = re.compile(
+            rf"^{re.escape(self.benchmark_prefix)}_\d{{6}}\s*:")
+        cis_count = 0
+        stig_count = 0
+        for line in self.read_lines(defaults):
+            stripped = line.strip()
+            if rule_pat.match(stripped):
+                cis_count += 1
+            elif stig_pat.match(stripped):
+                stig_count += 1
+        return "cis" if cis_count >= stig_count else "stig"
+
+    def get_benchmark_version(self) -> str:
+        """Extract benchmark_version from defaults/main.yml."""
+        defaults = os.path.join(self.directory, "defaults", "main.yml")
+        for line in self.read_lines(defaults):
+            m = re.match(r"^benchmark_version:\s*['\"]?([^'\"#\n]+)", line)
+            if m:
+                return m.group(1).strip()
+        return ""
+
     # -- run all checks -----------------------------------------------------
 
     # Checks that shell out to external tools and can run in parallel.
@@ -488,10 +558,12 @@ class RepoScanner:
         ]
 
         # Phase 1: launch subprocess-based checks in parallel
-        parallel_results = self._run_parallel_checks(checks)
+        total = sum(1 for n, _ in checks if n not in self.skip_checks)
+        parallel_results = self._run_parallel_checks(checks, total)
 
         # Phase 2: run remaining checks sequentially
         results: List[CheckResult] = []
+        done = sum(1 for n in parallel_results)
         for name, cls in checks:
             if name in parallel_results:
                 results.append(parallel_results[name])
@@ -501,6 +573,8 @@ class RepoScanner:
                                            status="SKIP",
                                            summary="Skipped by user"))
                 continue
+            done += 1
+            self.status.update(f"  [{done}/{total}] {cls.display_name}...")
             if self.verbose:
                 print(f"  Running {name} ...", file=sys.stderr)
             t0 = time.monotonic()
@@ -521,7 +595,7 @@ class RepoScanner:
         return results
 
     def _run_parallel_checks(
-        self, checks: List[Tuple[str, type]],
+        self, checks: List[Tuple[str, type]], total: int,
     ) -> Dict[str, CheckResult]:
         """Run subprocess-based checks concurrently using threads."""
         eligible = [
@@ -531,7 +605,11 @@ class RepoScanner:
         if not eligible:
             return {}
 
+        names = ", ".join(cls.display_name for _, cls in eligible)
+        self.status.update(f"  [1/{total}] {names} (parallel)...")
+
         result_map: Dict[str, CheckResult] = {}
+        done_count = 0
 
         def _run_one(name: str, cls: type) -> Tuple[str, CheckResult]:
             if self.verbose:
@@ -561,6 +639,9 @@ class RepoScanner:
             for fut in concurrent.futures.as_completed(futures):
                 name, result = fut.result()
                 result_map[name] = result
+                done_count += 1
+                self.status.update(
+                    f"    {result.name} done ({result.elapsed:.2f}s)")
 
         return result_map
 
@@ -688,6 +769,7 @@ class SpellCheck:
                 for text in texts:
                     if re.search(r"https?://", text):
                         continue
+                    text = _strip_jinja2(text)
                     words = re.findall(r"[a-zA-Z']+", text)
                     for word in words:
                         low = word.lower().strip("'")
@@ -736,6 +818,7 @@ class GrammarCheck:
                 for source, text in texts:
                     if re.search(r"https?://", text):
                         continue
+                    text = _strip_jinja2(text)
                     is_aide = "aide" in text.lower()
                     for pat, desc_tmpl, sev in GRAMMAR_PATTERNS:
                         if is_md and desc_tmpl in self._MD_SKIP_PATTERNS:
@@ -912,7 +995,7 @@ class UnusedVarCheck:
         for vname, (rfile, rline) in refs.items():
             if vname in all_defined:
                 continue
-            is_substr = any(vname in dv and vname != dv
+            is_substr = any(dv.startswith(vname + "_")
                             for dv in dynamic_vars)
             if is_substr:
                 continue
@@ -1090,6 +1173,8 @@ class FileModeCheck:
         for fp in files:
             rel = _relpath(fp, self.scanner.directory)
             for num, raw in enumerate(self.scanner.read_lines(fp), 1):
+                if raw.lstrip().startswith("#"):
+                    continue
                 m = pat.match(raw)
                 if not m:
                     continue
@@ -1275,7 +1360,18 @@ class RuleCoverageCheck:
             return CheckResult(self.display_name, "SKIP",
                                summary="No benchmark prefix detected")
 
-        rule_pat = re.compile(rf"^({re.escape(prefix)}_rule_\w+):")
+        # Build pattern based on benchmark type (CIS vs STIG)
+        bm_type = self.scanner.benchmark_type
+        if bm_type == "stig":
+            rule_pat = re.compile(
+                rf"^({re.escape(prefix)}_\d{{6}})\s*:")
+            ref_pat = re.compile(
+                rf"\b({re.escape(prefix)}_\d{{6}})\b")
+        else:
+            rule_pat = re.compile(
+                rf"^({re.escape(prefix)}_rule_[\d_]+)\s*:")
+            ref_pat = re.compile(
+                rf"\b({re.escape(prefix)}_rule_[\d_]+)\b")
 
         # Collect defined rule vars from defaults/main.yml
         defined_rules: Dict[str, int] = {}
@@ -1291,8 +1387,6 @@ class RuleCoverageCheck:
         if not os.path.isdir(tasks_dir):
             return CheckResult(self.display_name, "SKIP",
                                summary="No tasks directory found")
-
-        ref_pat = re.compile(rf"\b({re.escape(prefix)}_rule_\w+)\b")
         for fp in self.scanner.collect_files(tasks_dir, {".yml", ".yaml"}):
             rel = _relpath(fp, self.d)
             for num, raw in enumerate(self.scanner.read_lines(fp), 1):
@@ -1371,7 +1465,8 @@ class ReportGenerator:
             f"**Date:** {self.meta.date}  ",
             f"**Branch:** {self.meta.branch}  ",
             f"**Tool Version:** {self.meta.tool_version}  ",
-            f"**Benchmark Prefix:** {self.meta.benchmark_prefix}\n",
+            f"**Benchmark Prefix:** {self.meta.benchmark_prefix}  ",
+            f"**Benchmark Version:** {self.meta.benchmark_version}\n",
             "---\n",
             "## Summary\n",
             "| Metric | Count |",
@@ -1451,6 +1546,7 @@ class ReportGenerator:
             branch=_html_escape(self.meta.branch),
             tool_version=_html_escape(self.meta.tool_version),
             benchmark_prefix=_html_escape(self.meta.benchmark_prefix),
+            benchmark_version=_html_escape(self.meta.benchmark_version),
             total=s["total"], passed=s["passed"], failed=s["failed"],
             warnings=s["warnings"], skipped=s["skipped"],
             sections="\n".join(sections))
@@ -1466,6 +1562,7 @@ class ReportGenerator:
                 "date": self.meta.date,
                 "tool_version": self.meta.tool_version,
                 "benchmark_prefix": self.meta.benchmark_prefix,
+                "benchmark_version": self.meta.benchmark_version,
             },
             "summary": s,
             "checks": [
@@ -1545,8 +1642,9 @@ HTML_TEMPLATE = textwrap.dedent("""\
 <div class="metadata">
   <span><strong>Date:</strong> {date}</span>
   <span><strong>Branch:</strong> {branch}</span>
-  <span><strong>Version:</strong> {tool_version}</span>
+  <span><strong>Tool Version:</strong> {tool_version}</span>
   <span><strong>Prefix:</strong> {benchmark_prefix}</span>
+  <span><strong>Benchmark Version:</strong> {benchmark_version}</span>
 </div>
 <div class="section">
 <h2>Summary</h2>
@@ -1694,7 +1792,8 @@ class AutoFixer:
         if not m:
             return line
         mode = m.group(1)
-        return line.replace(f"mode: {mode}", f"mode: '{mode}'", 1)
+        return re.sub(r"(mode:\s+)" + re.escape(mode),
+                       r"\g<1>'" + mode + "'", line, count=1)
 
     def _fix_fqcn(self, line: str, finding: Finding) -> str:
         m = re.search(r"Non-FQCN module: '(\w+)'", finding.description)
@@ -1830,7 +1929,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-f", "--format", choices=["md", "html", "json"],
                         default="md", help="Report format (default: md)")
     parser.add_argument("-o", "--output", default=None,
-                        help="Output file (default: qa_report.{format})")
+                        help="Output file (default: qa_report_{repo}_{version}_{timestamp}.{format})")
     parser.add_argument("-d", "--directory", default=None,
                         help="Repository directory (default: script location or cwd)")
     parser.add_argument("--skip", default="",
@@ -1855,6 +1954,10 @@ def parse_args() -> argparse.Namespace:
                         help="Exit 1 on warnings (WARN), exit 2 on errors (FAIL)")
     parser.add_argument("--verbose", action="store_true",
                         help="Verbose output during run")
+    parser.add_argument("--progress", action="store_true", default=None,
+                        help="Show inline progress status (auto-enabled on TTY)")
+    parser.add_argument("--no-progress", action="store_true",
+                        help="Disable progress status even on TTY")
     parser.add_argument("--console", action="store_true",
                         help="Print colored results to terminal")
     parser.add_argument("--version", action="version",
@@ -1894,24 +1997,48 @@ def main() -> None:
 
     # Determine output file to exclude from scanning
     output_ext = args.format
+
+    # If user gave an explicit --output, use it for exclude_paths now;
+    # otherwise the default name depends on scanner metadata and is
+    # resolved after the scanner is created.
     if args.no_report:
         output_path = None
-    else:
-        output_path = args.output or f"qa_report.{output_ext}"
+    elif args.output:
+        output_path = args.output
         if not os.path.isabs(output_path):
             output_path = os.path.join(directory, output_path)
+    else:
+        output_path = None  # will be set after scanner provides metadata
     exclude_paths = {os.path.abspath(output_path)} if output_path else set()
 
+    # Progress: auto-enable on TTY unless explicitly disabled
+    show_progress = (not args.no_progress
+                     and (args.progress or sys.stderr.isatty()))
+
     scanner = RepoScanner(directory, args.benchmark, skip, args.verbose,
-                          config, exclude_paths)
+                          config, exclude_paths, progress=show_progress)
+
+    repo_name = scanner.get_repo_name()
+    bm_version = scanner.get_benchmark_version()
+    bm_ver_safe = bm_version.replace(".", "_") if bm_version else "unknown"
+    now = datetime.datetime.now()
+    run_timestamp = now.strftime("%Y-%m-%d_%H%M%S")
 
     metadata = ReportMetadata(
-        repo_name=scanner.get_repo_name(),
+        repo_name=repo_name,
         branch=scanner.get_git_branch(),
-        date=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        date=now.strftime("%Y-%m-%d %H:%M:%S"),
         tool_version=TOOL_VERSION,
         benchmark_prefix=scanner.benchmark_prefix,
+        benchmark_version=bm_version,
     )
+
+    # Build default output path now that repo metadata is available
+    if not args.no_report and not args.output:
+        output_path = f"qa_report_{repo_name}_{bm_ver_safe}_{run_timestamp}.{output_ext}"
+        if not os.path.isabs(output_path):
+            output_path = os.path.join(directory, output_path)
+        scanner.exclude_paths.add(os.path.abspath(output_path))
 
     if args.verbose:
         print(f"Scanning: {directory}", file=sys.stderr)

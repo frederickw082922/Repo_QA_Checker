@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.4.1
+**Version:** 2.5.0
 
 ---
 
@@ -33,8 +33,9 @@ Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/a
 Key features:
 
 - **Zero external Python dependencies** -- uses only the Python standard library
-- **Auto-detects** the benchmark variable prefix (e.g., `rhel9cis`, `ubuntu2204cis`)
-- **Generates reports** in Markdown, HTML, or JSON
+- **Auto-detects** the benchmark variable prefix (e.g., `rhel9cis`, `ubuntu2204cis`) and benchmark type (CIS vs STIG)
+- **Full CIS and STIG support** -- rule coverage checks work for both `{prefix}_rule_X_X_X` (CIS) and `{prefix}_XXXXXX` (STIG) toggle patterns
+- **Generates reports** in Markdown, HTML, or JSON with repo name, benchmark version, and timestamp in filenames
 - **Auto-fix mode** for common issues (spelling, file mode quoting, FQCN)
 - **Baseline/delta mode** for incremental QA in CI pipelines
 - **Per-repo configuration** via `.qa_config.yml`
@@ -75,7 +76,7 @@ python3 /path/to/Ansible_Lockdown_QA_Repo_Check.py -d /path/to/RHEL9-CIS --conso
 python3 Ansible_Lockdown_QA_Repo_Check.py -f html
 ```
 
-This creates `qa_report.html` in the role directory.
+This creates `qa_report_{repo}_{version}_{timestamp}.html` in the role directory (e.g., `qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.html`).
 
 ---
 
@@ -91,7 +92,7 @@ python3 Ansible_Lockdown_QA_Repo_Check.py [OPTIONS]
 |------|-------|-------------|---------|
 | `--benchmark PREFIX` | `-b` | Benchmark variable prefix | Auto-detected |
 | `--format {md,html,json}` | `-f` | Report output format | `md` |
-| `--output PATH` | `-o` | Report output file path | `qa_report.{format}` |
+| `--output PATH` | `-o` | Report output file path | `qa_report_{repo}_{version}_{timestamp}.{format}` |
 | `--directory PATH` | `-d` | Repository directory | Script location or cwd |
 | `--skip CHECKS` | | Comma-separated checks to skip | None |
 | `--only CHECKS` | | Comma-separated checks to run (skip all others) | None |
@@ -103,6 +104,8 @@ python3 Ansible_Lockdown_QA_Repo_Check.py [OPTIONS]
 | `--no-report` | | Skip writing a report file (console-only mode) | Off |
 | `--strict` | | Exit 1 on warnings, exit 2 on errors | Off |
 | `--verbose` | | Show per-check timing and progress on stderr | Off |
+| `--progress` | | Show inline progress status during checks | Auto (TTY) |
+| `--no-progress` | | Disable progress status even on TTY | Off |
 | `--console` | | Print colored results to terminal | Off |
 | `--version` | | Show tool version and exit | |
 | `--help` | `-h` | Show help message with all options, examples, and exit codes | |
@@ -134,15 +137,15 @@ The tool runs 11 independent checks. Each produces a status of **PASS**, **FAIL*
 |---|-----------|--------------|--------------|
 | 1 | **YAML Lint** | `yamllint` | Runs `yamllint -f parsable` against all YAML files. Skipped if `yamllint` is not installed. |
 | 2 | **Ansible Lint** | `ansiblelint` | Runs `ansible-lint -f pep8`. Skipped if `ansible-lint` is not installed. |
-| 3 | **Spell Check** | `spelling` | Scans comments and task `name:` fields for ~130 common misspellings. |
-| 4 | **Grammar Check** | `grammar` | Detects repeated words, double spaces, missing apostrophes, and subject-verb disagreement in comments and task names. |
+| 3 | **Spell Check** | `spelling` | Scans comments and task `name:` fields for ~130 common misspellings. Jinja2 expressions are stripped before checking. |
+| 4 | **Grammar Check** | `grammar` | Detects repeated words, double spaces, missing apostrophes, and subject-verb disagreement in comments and task names. Jinja2 expressions are stripped before checking. |
 | 5 | **Unused Variables** | `unused_vars` | **Forward:** Variables defined in `defaults/main.yml` or `vars/` but never referenced. **Reverse:** Variables with the benchmark prefix referenced in tasks but never defined. |
 | 6 | **Variable Naming** | `var_naming` | Validates `register:` variable prefixes, detects duplicate register names (with mutually exclusive `when:` suppression), and duplicate defaults. |
 | 7 | **File Mode Quoting** | `file_mode` | Flags unquoted numeric `mode:` values (e.g., `mode: 0644` should be `mode: '0644'`). |
 | 8 | **Company Naming** | `company_naming` | Detects outdated company name references (configurable). |
 | 9 | **Audit Template** | `audit_template` | Checks `templates/ansible_vars_goss.yml.j2` for duplicate keys. |
 | 10 | **FQCN Usage** | `fqcn` | Detects bare (non-FQCN) Ansible built-in module names (e.g., `command:` should be `ansible.builtin.command:`). |
-| 11 | **Rule Coverage** | `rule_coverage` | Cross-references `*_rule_*` variables in `defaults/main.yml` against task `when:` conditions to find orphaned or missing rules. |
+| 11 | **Rule Coverage** | `rule_coverage` | Cross-references rule toggle variables in `defaults/main.yml` against task `when:` conditions to find orphaned or missing rules. Auto-detects CIS (`{prefix}_rule_X_X_X`) vs STIG (`{prefix}_XXXXXX`) toggle patterns. |
 
 ### Skipping Checks
 
@@ -189,11 +192,23 @@ python3 Ansible_Lockdown_QA_Repo_Check.py --min-severity warning --console --no-
 
 ## Report Formats
 
+### Default Output Naming
+
+Report filenames include the repo name, benchmark version, and timestamp:
+
+```
+qa_report_{repo}_{version}_{timestamp}.{ext}
+```
+
+For example: `qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.md`
+
+The benchmark version is read from `benchmark_version:` in `defaults/main.yml`. If not found, `unknown` is used.
+
 ### Markdown (default)
 
 ```bash
 python3 Ansible_Lockdown_QA_Repo_Check.py -f md
-# Creates: qa_report.md
+# Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.md
 ```
 
 Generates a Markdown file with a summary table and per-check sections containing findings tables.
@@ -202,7 +217,7 @@ Generates a Markdown file with a summary table and per-check sections containing
 
 ```bash
 python3 Ansible_Lockdown_QA_Repo_Check.py -f html
-# Creates: qa_report.html
+# Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.html
 ```
 
 Generates a styled HTML page with color-coded severity badges, suitable for viewing in a browser.
@@ -211,7 +226,7 @@ Generates a styled HTML page with color-coded severity badges, suitable for view
 
 ```bash
 python3 Ansible_Lockdown_QA_Repo_Check.py -f json
-# Creates: qa_report.json
+# Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.json
 ```
 
 Generates structured JSON output including metadata, summary counts, per-check elapsed times, and all findings. Useful for programmatic consumption and CI pipelines.
@@ -411,7 +426,7 @@ Add the following to your Ansible role's `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.4.1  # pin to a release tag
+  rev: v2.5.0  # pin to a release tag
   hooks:
     - id: ansible-lockdown-qa
 ```
@@ -424,7 +439,7 @@ You can override the default `args` in your `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.4.1
+  rev: v2.5.0
   hooks:
     - id: ansible-lockdown-qa
       args: ['-d', '.', '--console', '--no-report', '--skip', 'grammar']
@@ -436,7 +451,7 @@ By default, the `yamllint` and `ansible-lint` checks are skipped gracefully when
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.4.1
+  rev: v2.5.0
   hooks:
     - id: ansible-lockdown-qa
       additional_dependencies: ['yamllint', 'ansible-lint']
@@ -529,6 +544,22 @@ python3 Ansible_Lockdown_QA_Repo_Check.py -f md -o reports/qa.md
 python3 Ansible_Lockdown_QA_Repo_Check.py -f html -o reports/qa.html
 python3 Ansible_Lockdown_QA_Repo_Check.py -f json -o reports/qa.json
 ```
+
+### Progress status
+
+When running on an interactive terminal, the tool prints progress lines showing which check is running:
+
+```
+  [1/11] YAML Lint, Ansible Lint (parallel)...
+    YAML Lint done (1.03s)
+    Ansible Lint done (0.51s)
+  [3/11] Spell Check...
+  [4/11] Grammar Check...
+  [5/11] Unused Variables...
+  ...
+```
+
+Progress is automatically disabled when output is piped or in CI environments. Use `--no-progress` to disable it explicitly, or `--progress` to force it on.
 
 ### Verbose mode with timing
 
