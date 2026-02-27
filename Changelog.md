@@ -4,6 +4,26 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.5.0
+
+### Added
+
+- **STIG support:** Benchmark type auto-detection (CIS vs STIG) via `_detect_benchmark_type()`. Rule Coverage check now correctly handles STIG toggle patterns (`{prefix}_XXXXXX`) in addition to CIS patterns (`{prefix}_rule_X_X_X`). Previously all STIG repos silently received a false PASS on rule coverage.
+- **Report filenames:** Default output filenames now include repo name, benchmark version, and timestamp (e.g., `qa_report_RHEL8-STIG_v2r4_2026-02-27_143012.md`). Benchmark version is extracted from `benchmark_version:` in `defaults/main.yml`.
+- **Report metadata:** `benchmark_version` field added to `ReportMetadata`. Benchmark version now displayed in Markdown, HTML, and JSON report headers.
+- **Jinja2 stripping:** Spell check and grammar check now strip `{{ ... }}` expressions before analysis, reducing false positives from template variable names in task names and comments.
+
+### Fixed
+
+- **Rule Coverage (STIG):** Check no longer silently returns 0 issues on STIG repos — uses `{prefix}_\d{6}` pattern instead of hardcoded `{prefix}_rule_\w+`
+- **Grammar check descriptions:** Subject-verb disagreement findings now show the matched word (e.g., `'variables' + 'is'` instead of generic `plural noun + 'is'`)
+- **Unused variable check:** Replaced overly broad substring suppression (`vname in dv`) with proper prefix matching (`dv.startswith(vname + "_")`) to prevent hiding genuinely undefined variables
+- **File mode check:** Comment lines (`# mode: 0644`) are now skipped, preventing false positives
+- **Auto-fix file mode:** Fixed silent failure when `mode:` values had non-standard whitespace (e.g., `mode:  0644`). Uses regex replacement to handle variable spacing.
+- **Task name extraction:** Jinja2 expressions are now stripped from task names rather than skipping the entire name, so surrounding text is still spell/grammar checked
+
+---
+
 ## 2.4.2
 
 ### Added
