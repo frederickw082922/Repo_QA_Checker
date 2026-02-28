@@ -2,7 +2,7 @@
 
 Validates consistency between an Ansible-Lockdown **remediation role** and its paired **Goss audit repo** — supports both **STIG** and **CIS** benchmarks, with or without a `Private-` prefix.
 
-**Version:** 2.5.0
+**Version:** 2.6.0
 
 ---
 

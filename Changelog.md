@@ -4,6 +4,28 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.6.0 - 2026-02-28
+
+### Added
+
+- **Audit Compare Tool** (`scripts/audit_compare.py`, `scripts/audit_compare.sh`) -- new tool for comparing pre and post remediation Goss audit results
+  - Shell wrapper with auto-discovery of latest pre/post audit files in `/var/tmp`
+  - CIS and STIG control ID extraction -- auto-groups by `1.1.1.1` (CIS) or `RHEL-09-123456` (STIG) patterns
+  - Benchmark name auto-detection from filenames (e.g., `rhel10cis` -> `RHEL10 CIS`)
+  - Benchmark version auto-detection from filenames (e.g., `v1_0_0`, `v1.2.0`)
+  - Four output formats: `text`, `markdown`, `json`, `html`
+  - HTML reports with color-coded badges, collapsible control groups, and styled summary tables matching main QA tool
+  - Auto-generated report filenames: `audit_compare_report_{benchmark}_{version}_{datetime}.{ext}`
+  - Expected vs found detail on regressed and still-failed controls
+  - Scan duration comparison in summary section
+  - CI-friendly exit codes: `0` (no regressions), `1` (regressions), `2` (input error)
+  - `--strict` mode: also exits `1` on still-failed controls
+  - `--title` flag to override auto-detected benchmark name
+  - `--no-report` flag for stdout-only output
+  - README at `scripts/audit_compare_README.md`
+
+---
+
 ## 2.5.0
 
 ### Added
