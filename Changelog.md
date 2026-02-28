@@ -22,6 +22,21 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
   - `--strict` mode: also exits `1` on still-failed controls
   - `--title` flag to override auto-detected benchmark name
   - `--no-report` flag for stdout-only output
+  - `--summary-only` flag to show only summary and changes breakdown, skipping detailed control listings
+  - **Interactive HTML reports** -- JavaScript-powered toolbar with:
+    - Filter buttons to toggle visibility of Fixed, Regressed, and Still Failed sections
+    - Search box to filter controls by ID or test name with match counter
+    - Sortable table columns (click headers to sort ascending/descending)
+    - Expand All / Collapse All toggle for `<details>` sections
+    - Click-to-navigate from Changes Breakdown rows to corresponding sections
+    - Print Report button with print-friendly CSS (hides toolbar, removes shadows)
+    - Graceful degradation when JavaScript is disabled (toolbar hidden via `<noscript>`)
+  - **Web UI** (`--serve [PORT]`) -- local web server for browser-based comparison workflow
+    - Single-page application with file browser, pre/post file selection, and inline report rendering
+    - Auto-classification of JSON files as PRE/POST based on filename patterns
+    - REST API endpoints: `/api/files`, `/api/compare`, `/api/report`
+    - Binds to `127.0.0.1` only with directory traversal prevention
+    - Default port: `9090`
   - README at `scripts/audit_compare_README.md`
 
 ---

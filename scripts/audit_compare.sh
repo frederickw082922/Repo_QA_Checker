@@ -24,6 +24,9 @@ OUTPUT=""
 TITLE=""
 STRICT=""
 NO_REPORT=""
+SUMMARY_ONLY=""
+SERVE=""
+SERVE_PORT=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -41,6 +44,8 @@ Options:
     -n, --no-report     Print to stdout only, do not write a report file
     -t, --title NAME    Benchmark name for report title (default: auto-detected)
     -s, --strict        Exit 1 on regressions or still-failed controls
+    -u, --summary-only  Show only summary and changes breakdown
+    -S, --serve [PORT]  Launch web UI on PORT (default: 9090)
     -l, --list          List available audit files and exit
     -h, --help          Show this help message
 
@@ -58,6 +63,8 @@ Examples:
     $(basename "$0") -n                           # Print to stdout only
     $(basename "$0") -t "RHEL9 CIS"               # Custom benchmark title
     $(basename "$0") -s                           # Strict mode for CI
+    $(basename "$0") -S                           # Web UI on port 9090
+    $(basename "$0") -S 9090                      # Web UI on port 9090
     $(basename "$0") -l                           # List available files
 EOF
     exit 0
@@ -113,6 +120,20 @@ while [[ $# -gt 0 ]]; do
             STRICT="yes"
             shift
             ;;
+        -u|--summary-only)
+            SUMMARY_ONLY="yes"
+            shift
+            ;;
+        -S|--serve)
+            SERVE="yes"
+            # Check if next argument is a port number
+            if [[ -n "$2" ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                SERVE_PORT="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
         -l|--list)
             list_audit_files
             exit 0
@@ -126,6 +147,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Serve mode: skip file validation and launch web UI
+if [[ -n "$SERVE" ]]; then
+    CMD="python3 ${SCRIPT_DIR}/audit_compare.py --serve"
+    if [[ -n "$SERVE_PORT" ]]; then
+        CMD="$CMD $SERVE_PORT"
+    fi
+    exec $CMD
+fi
 
 # Validate format
 if [[ ! "$FORMAT" =~ ^(text|markdown|json|html)$ ]]; then
@@ -179,6 +209,9 @@ if [[ -n "$STRICT" ]]; then
 fi
 if [[ -n "$NO_REPORT" ]]; then
     CMD="$CMD --no-report"
+fi
+if [[ -n "$SUMMARY_ONLY" ]]; then
+    CMD="$CMD --summary-only"
 fi
 CMD="$CMD $PRE_FILE $POST_FILE"
 
