@@ -1,6 +1,6 @@
-# Audit Compare Tool
+# Lockdown Goss Audit Compare Tool
 
-Compares pre and post remediation [Goss](https://github.com/goss-org/goss) audit results to measure compliance improvement after running an Ansible-Lockdown hardening role.
+Compares **PRE** and **POST** remediation [Goss](https://github.com/goss-org/goss) audit results to measure compliance improvement after running an Ansible-Lockdown hardening role.
 
 ---
 
@@ -25,7 +25,7 @@ Compares pre and post remediation [Goss](https://github.com/goss-org/goss) audit
 
 ## Overview
 
-After applying a CIS/STIG remediation role, a typical workflow runs a Goss audit **before** (pre-scan) and **after** (post-scan) remediation. Each audit produces a JSON file containing per-test pass/fail results.
+After applying a CIS/STIG remediation role, a typical workflow runs a Lockdown Goss Audit **before** (pre-scan) and **after** (post-scan) remediation. Each audit produces a JSON file containing per-test pass/fail results.
 
 This tool ingests those two JSON files and produces a comparison report showing:
 
@@ -60,7 +60,7 @@ Key features:
 |-------------|-------|
 | Python 3.8+ | Standard library only, no `pip install` needed |
 | Bash | Required only for the shell wrapper (`audit_compare.sh`) |
-| Goss audit JSON files | Pre and post remediation scan output |
+| Lockdown Goss Audit JSON files | Pre and post remediation scan output |
 
 ---
 
@@ -163,8 +163,8 @@ Positional arguments are required unless `--serve` is used.
 
 | Argument | Description |
 |----------|-------------|
-| `pre_audit` | Pre-remediation Goss audit JSON file |
-| `post_audit` | Post-remediation Goss audit JSON file |
+| `pre_audit` | Pre-remediation Lockdown Goss Audit JSON file |
+| `post_audit` | Post-remediation Lockdown Goss Audit JSON file |
 
 #### Options
 

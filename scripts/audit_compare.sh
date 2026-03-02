@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Goss Audit Comparison Wrapper
+# Lockdown Goss Audit Comparison Wrapper
 #
 # This script simplifies comparing audit files by:
 # - Auto-discovering the most recent pre/post audit files
@@ -33,7 +33,7 @@ usage() {
     cat << EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Compare pre and post remediation Goss audit results.
+Compare pre and post remediation Lockdown Goss Audit results.
 
 Options:
     -d, --dir DIR       Directory containing audit files (default: /var/tmp)

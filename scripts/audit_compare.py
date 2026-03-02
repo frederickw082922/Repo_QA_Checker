@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Goss Audit Comparison Tool
+Lockdown Goss Audit Comparison Tool
 
-Compares pre and post remediation Goss audit results to show:
+Compares pre and post remediation Lockdown Goss Audit results to show:
 - Controls that were fixed (failed -> passed)
 - Controls that regressed (passed -> failed)
 - Controls that remain failed
@@ -32,7 +32,7 @@ def detect_benchmark_name(pre_file, post_file):
     """Detect benchmark name from audit filenames.
 
     Looks for patterns like 'rhel10cis', 'ubuntu2204stig', 'amazon2023stig'
-    in the filenames. Falls back to 'Goss Audit' if no match.
+    in the filenames. Falls back to 'Lockdown Goss Audit' if no match.
     """
     # Common benchmark prefixes in Ansible-Lockdown audit filenames
     pattern = re.compile(
@@ -52,7 +52,7 @@ def detect_benchmark_name(pre_file, post_file):
                 bench_type = inner.group(3).upper()
                 return f"{os_name}{version} {bench_type}"
             return raw.upper()
-    return "Goss Audit"
+    return "Lockdown Goss Audit"
 
 
 def detect_benchmark_version(pre_file, post_file):
@@ -72,7 +72,7 @@ def detect_benchmark_version(pre_file, post_file):
 
 
 def load_audit_file(filepath):
-    """Load and parse a Goss audit JSON file."""
+    """Load and parse a Lockdown Goss Audit JSON file."""
     try:
         with open(filepath, 'r') as f:
             return json.load(f)
@@ -85,7 +85,7 @@ def load_audit_file(filepath):
 
 
 def extract_results(audit_data):
-    """Extract test results from Goss audit data."""
+    """Extract test results from Lockdown Goss Audit data."""
     results = {}
 
     if 'results' not in audit_data:
@@ -250,11 +250,11 @@ def format_duration(nanoseconds):
     return f"{minutes}m {remaining:.1f}s"
 
 
-def format_text_report(comparison, pre_summary, post_summary, pre_file, post_file, benchmark="Goss Audit", summary_only=False):
+def format_text_report(comparison, pre_summary, post_summary, pre_file, post_file, benchmark="Lockdown Goss Audit", summary_only=False):
     """Generate a text format report."""
     lines = []
     lines.append("=" * 80)
-    lines.append(f"{benchmark.upper()} AUDIT COMPARISON REPORT")
+    lines.append(f"{benchmark.upper()} COMPARISON REPORT")
     lines.append("=" * 80)
     lines.append("")
     lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -361,10 +361,10 @@ def format_text_report(comparison, pre_summary, post_summary, pre_file, post_fil
     return "\n".join(lines)
 
 
-def format_markdown_report(comparison, pre_summary, post_summary, pre_file, post_file, benchmark="Goss Audit", summary_only=False):
+def format_markdown_report(comparison, pre_summary, post_summary, pre_file, post_file, benchmark="Lockdown Goss Audit", summary_only=False):
     """Generate a Markdown format report."""
     lines = []
-    lines.append(f"# {benchmark} Audit Comparison Report")
+    lines.append(f"# {benchmark} Comparison Report")
     lines.append("")
     lines.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
@@ -459,7 +459,7 @@ def format_markdown_report(comparison, pre_summary, post_summary, pre_file, post
     return "\n".join(lines)
 
 
-def format_json_report(comparison, pre_summary, post_summary, pre_file, post_file, benchmark="Goss Audit", summary_only=False):
+def format_json_report(comparison, pre_summary, post_summary, pre_file, post_file, benchmark="Lockdown Goss Audit", summary_only=False):
     """Generate a JSON format report."""
     report = {
         'metadata': {
@@ -800,7 +800,7 @@ def _build_search_text(control_id, items, key_field='pre'):
     return ' '.join(parts)
 
 
-def format_html_report(comparison, pre_summary, post_summary, pre_file, post_file, benchmark="Goss Audit", summary_only=False):
+def format_html_report(comparison, pre_summary, post_summary, pre_file, post_file, benchmark="Lockdown Goss Audit", summary_only=False):
     """Generate an interactive HTML format report."""
     sections = []
 
@@ -902,7 +902,7 @@ def format_html_report(comparison, pre_summary, post_summary, pre_file, post_fil
         f"{breakdown_html}</table>\n</div>\n")
 
     if summary_only:
-        title = f"{_esc(benchmark)} Audit Comparison Report"
+        title = f"{_esc(benchmark)} Comparison Report"
         return HTML_TEMPLATE.format(
             title=title,
             generated=_esc(datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
@@ -987,7 +987,7 @@ def format_html_report(comparison, pre_summary, post_summary, pre_file, post_fil
             f"<p>These controls require manual remediation or configuration changes.</p>\n"
             f"{controls_html}</div>\n")
 
-    title = f"{_esc(benchmark)} Audit Comparison Report"
+    title = f"{_esc(benchmark)} Comparison Report"
     return HTML_TEMPLATE.format(
         title=title,
         generated=_esc(datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
@@ -1008,7 +1008,7 @@ WEB_UI_HTML = """\
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Goss Audit Compare &mdash; Web UI</title>
+<title>Lockdown Goss Audit Compare UI &mdash; Web UI</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
@@ -1058,7 +1058,7 @@ WEB_UI_HTML = """\
 </style>
 </head>
 <body>
-<h1>Goss Audit Compare <small>Web UI</small></h1>
+<h1>Lockdown Goss Audit Compare UI <small>Web UI</small></h1>
 
 <div class="panel">
   <h2>Select Audit Files</h2>
@@ -1420,7 +1420,7 @@ def serve_web_ui(port, base_dir=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Compare pre and post remediation Goss audit results',
+        description='Compare pre and post remediation Lockdown Goss Audit results',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
