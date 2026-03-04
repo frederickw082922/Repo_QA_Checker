@@ -199,11 +199,8 @@ def auto_detect_rule_id_prefix(audit_dir: str) -> str:
     For STIG repos: extracts e.g. 'AZLX-23' from 'AZLX-23-000100.yml'
     For CIS repos: returns '' (CIS uses section-based naming)
     """
-    for cat in ("cat_1", "cat_2", "cat_3"):
-        cat_path = os.path.join(audit_dir, cat)
-        if not os.path.isdir(cat_path):
-            continue
-        for _root, _dirs, files in os.walk(cat_path):
+    for subdir in _find_audit_subdirs(audit_dir):
+        for _root, _dirs, files in os.walk(subdir):
             for fname in sorted(files):
                 if not fname.endswith(".yml"):
                     continue
@@ -388,9 +385,9 @@ def extract_audit_files(audit_dir: str, benchmark_type: str,
                 rel = os.path.relpath(fpath, audit_dir)
                 stem = os.path.splitext(fname)[0]
 
-                # Determine cat from directory path
+                # Determine cat/section from directory path
                 dir_cat = None
-                cat_match = re.search(r"cat_(\d)", rel)
+                cat_match = re.search(r"(?:cat|section)_(\d+)", rel)
                 if cat_match:
                     dir_cat = int(cat_match.group(1))
 
@@ -473,11 +470,19 @@ def extract_task_data(tasks_dir: str, benchmark_type: str,
     else:
         when_pat = None
 
-    for cat in ("cat_1", "cat_2", "cat_3"):
-        cat_path = os.path.join(tasks_dir, cat)
-        if not os.path.isdir(cat_path):
-            continue
-        cat_num = int(cat.split("_")[1])
+    # Discover task subdirectories dynamically (cat_* for STIG, section_* for CIS)
+    task_subdirs: List[str] = []
+    if os.path.isdir(tasks_dir):
+        for entry in sorted(os.listdir(tasks_dir)):
+            full = os.path.join(tasks_dir, entry)
+            if os.path.isdir(full) and (entry.startswith("cat_") or
+                                         entry.startswith("section_")):
+                task_subdirs.append(entry)
+
+    for subdir_name in task_subdirs:
+        cat_path = os.path.join(tasks_dir, subdir_name)
+        # Extract numeric portion: cat_1 -> 1, section_3 -> 3
+        cat_num = int(subdir_name.split("_", 1)[1]) if "_" in subdir_name else 0
 
         for fname in sorted(os.listdir(cat_path)):
             if not fname.endswith(".yml") or fname == "main.yml":
@@ -734,6 +739,9 @@ def extract_template_variables(
                 if m:
                     var_name = m.group(1)
                     raw_val = m.group(2).strip()
+                    # Skip Jinja2 control blocks ({% if %}, {% for %}, etc.)
+                    if "{%" in raw_val:
+                        continue
                     is_hardcoded = "{{" not in raw_val
                     if is_hardcoded:
                         raw_val = _strip_yaml_value(raw_val)
@@ -1052,7 +1060,7 @@ def check_category_alignment(
     task_data: Dict[str, TaskInfo],
     audit_files: Dict[str, AuditInfo],
 ) -> CheckResult:
-    """Check 5: Rules live in matching cat_X dirs in both repos."""
+    """Check 5: Rules live in matching cat_X/section_X dirs in both repos."""
     findings: List[Finding] = []
     common = set(task_data.keys()) & set(audit_files.keys())
 
@@ -1198,7 +1206,13 @@ def check_goss_template_var_sync(
         if val in ("|", ">", "|-", ">-"):
             continue
 
-        # Check against defaults config vars
+        # Skip empty values (multiline structure parent keys like dicts/lists)
+        if not val or val == "":
+            continue
+
+        # Only flag mismatches against defaults — variables hardcoded in
+        # template but absent from defaults are intentional (audit-only
+        # structural vars like bootloader paths, sshd_limited, etc.)
         if var in defaults_config:
             def_val, _def_line = defaults_config[var]
             if def_val in ("|", ">", "|-", ">-"):
@@ -1214,17 +1228,6 @@ def check_goss_template_var_sync(
                     severity="warning",
                     check_name="goss_template_var_sync",
                 ))
-        elif var not in defaults_toggles:
-            # Variable hardcoded in template but not found in defaults at all
-            findings.append(Finding(
-                file="templates/ansible_vars_goss.yml.j2",
-                line=lineno,
-                description=(
-                    f"Hardcoded template variable '{var}' not found in defaults/main.yml"
-                ),
-                severity="info",
-                check_name="goss_template_var_sync",
-            ))
 
     status = _determine_status(findings, warn_on_any=True)
     return CheckResult("Template Variable Sync", status, findings,

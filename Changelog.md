@@ -4,7 +4,17 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
-## 2.6.0 - 2026-02-28
+## 2.6.0 - 2026-03-04
+
+### Fixed
+
+- **Cross-Repo Validator: Rule Key Consistency false positives (CIS):** `extract_task_data()` used hardcoded `cat_1/cat_2/cat_3` directory names, causing zero tasks to be found for CIS repos that use `section_*` directories. All audit rules were falsely flagged as "Rule found in audit but no task." Task subdirectory discovery now dynamically finds both `cat_*` and `section_*` directories, matching the audit extraction logic.
+- **Cross-Repo Validator: Template Variable Sync false positives:** Reduced false positives from three sources:
+  - Jinja2 control blocks (`{% if %}`, `{% for %}`) on value lines were incorrectly classified as hardcoded — now skipped during extraction
+  - Empty/bare values (multiline YAML structure parent keys) were flagged — now skipped
+  - Variables intentionally hardcoded in the template but absent from `defaults/main.yml` (audit-only structural vars like bootloader paths, `sshd_limited`) were reported as info findings — now silently accepted as intentional
+- **Cross-Repo Validator: Audit directory category extraction:** `cat_(\d)` regex only matched `cat_*` directories — updated to `(?:cat|section)_(\d+)` so section numbers are extracted correctly for CIS repos
+- **Cross-Repo Validator: Rule ID prefix detection:** `auto_detect_rule_id_prefix()` used hardcoded `cat_*` directories — now uses `_find_audit_subdirs()` for consistent directory discovery
 
 ### Added
 

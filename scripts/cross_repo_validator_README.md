@@ -316,9 +316,11 @@ Only simple scalar values are compared; multi-line blocks and list values are sk
 
 **Key:** `goss_template_var_sync`
 
-Scans `templates/ansible_vars_goss.yml.j2` for variables that use **hardcoded literal values** instead of Jinja2 templating (`{{ }}`). When a hardcoded value is found, verifies it matches `defaults/main.yml`. Catches cases where a developer hardcoded a value in the template that has since changed in defaults.
+Scans `templates/ansible_vars_goss.yml.j2` for variables that use **hardcoded literal values** instead of Jinja2 templating (`{{ }}`). When a hardcoded value is found and the same variable exists in `defaults/main.yml`, verifies the values match. Catches cases where a developer hardcoded a value in the template that has since changed in defaults.
 
-**Severity:** warning (mismatch), info (hardcoded but not in defaults)
+Skips Jinja2 control blocks (`{% if %}`, `{% for %}`), empty/bare parent keys for multiline structures, and variables that are intentionally hardcoded in the template but absent from defaults (audit-only structural vars like bootloader paths).
+
+**Severity:** warning (mismatch)
 
 ---
 
@@ -507,7 +509,7 @@ Detected from `defaults/main.yml` by voting on underscore-delimited variable nam
 
 ### 3. Rule ID Prefix (STIG only)
 
-Detected from the first audit file name found under `cat_*/`:
+Detected from the first audit file name found under `cat_*/` or `section_*/`:
 
 | Audit File | Detected Prefix |
 |-----------|----------------|
@@ -689,19 +691,17 @@ python3 scripts/cross_repo_validator.py \
   defaults/main.yml ----+              +-- vars/STIG.yml or CIS.yml
     (rule toggles)      |              |     (rule toggles)
                         |              |
-  templates/            |  cross_repo  |   cat_1/*.yml  (STIG)
-    ansible_vars_       +--validator---+   cat_2/**/*.yml
-    goss.yml.j2         |  14 checks |   cat_3/**/*.yml
-    (rule toggles)      |              |   section_*/*.yml (CIS)
-                        |              |     (conditionals,
-  tasks/cat_{1,2,3}/  --+              +--    Rule_IDs,
-    (rule keys,                        |      rule keys,
-     Rule_IDs,                         |      categories)
-     categories)                       |
-                                       +-- goss.yml
-                                       |     (include globs)
-                                       |
-                                       +-- run_audit.sh
+  templates/            |  cross_repo  |   cat_*/*.yml    (STIG)
+    ansible_vars_       +--validator---+   section_*/*.yml (CIS)
+    goss.yml.j2         |  14 checks  |     (conditionals,
+    (rule toggles)      |              |      Rule_IDs,
+                        |              +--    rule keys,
+  tasks/              --+              |      categories)
+    cat_*/ (STIG)       |              |
+    section_*/ (CIS)    |              +-- goss.yml
+    (rule keys,                        |     (include globs)
+     Rule_IDs,                         |
+     categories)                       +-- run_audit.sh
                                              (version)
 ```
 
@@ -713,7 +713,7 @@ Before extraction, the tool detects:
 |------|-----|
 | Benchmark type | Count `_rule_` vs 6-digit patterns in `defaults/main.yml` |
 | Benchmark prefix | Counter-voting on underscore-delimited variable segments |
-| Rule ID prefix | First STIG-pattern filename in `cat_*/` (empty for CIS) |
+| Rule ID prefix | First STIG-pattern filename in `cat_*/` or `section_*/` (empty for CIS) |
 | Audit vars file | Scan `vars/` for `STIG.yml`, `CIS.yml`, or any `.yml` |
 | Audit repo | Sibling directory search with `Private-` prefix stripping |
 
@@ -728,7 +728,7 @@ Before running checks, the tool extracts data from both repos into normalized di
 | `templates/ansible_vars_goss.yml.j2` | Toggle pattern + hardcoded vs templated config variables |
 | `vars/STIG.yml` or `vars/CIS.yml` | Toggle pattern + config variables + all defined variable names |
 | Audit `cat_*/**/*.yml` or `section_*/**/*.yml` | Goss conditionals, Rule_IDs, rule keys, categories, `.Vars.*` references |
-| Task `cat_*/*.yml` or `section_*/*.yml` | Rule keys from task names, Rule_IDs from tags, categories from directory |
+| Task `cat_*/*.yml` (STIG) or `section_*/*.yml` (CIS) | Rule keys from task names/when: conditions, Rule_IDs from tags, categories from directory |
 | `goss.yml` | Glob patterns for audit file inclusion |
 | 3 version locations | Raw version strings normalized to `(major, minor)` tuples |
 
