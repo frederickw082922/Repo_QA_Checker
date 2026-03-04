@@ -258,6 +258,8 @@ Three-way validation:
 2. Rule keys present in tasks but missing from audit (informational).
 3. Rule keys present in audit but missing from tasks (informational).
 
+**Note:** Audit files may contain multiple rules in a single file (e.g., CIS `cis_3.5.3.3.x.yml` with 6 rules, or STIG files with multiple STIG_IDs). All toggle conditionals, STIG_IDs, and Rule_IDs within each file are extracted and registered individually.
+
 **Severity:** error (filename/metadata mismatch), info (coverage gaps)
 
 ---

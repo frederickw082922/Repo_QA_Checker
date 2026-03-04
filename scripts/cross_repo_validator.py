@@ -391,54 +391,98 @@ def extract_audit_files(audit_dir: str, benchmark_type: str,
                 if cat_match:
                     dir_cat = int(cat_match.group(1))
 
-                rule_id = None
-                meta_id = None  # STIG_ID from metadata
                 meta_cat = None
-                toggle_from_conditional = None
+                all_toggles: List[str] = []
+                all_stig_ids: List[str] = []
+                all_rule_ids: List[str] = []
 
                 try:
                     with open(fpath, "r", encoding="utf-8") as fh:
                         for line in fh:
-                            if rule_id is None:
-                                m = rule_id_pat.search(line)
-                                if m:
-                                    rule_id = m.group(1)
-                            if meta_id is None:
-                                m = stig_id_pat.search(line)
-                                if m:
-                                    meta_id = m.group(1)
+                            m = rule_id_pat.search(line)
+                            if m:
+                                rid = m.group(1)
+                                if rid not in all_rule_ids:
+                                    all_rule_ids.append(rid)
+                            m = stig_id_pat.search(line)
+                            if m:
+                                sid = m.group(1)
+                                if sid not in all_stig_ids:
+                                    all_stig_ids.append(sid)
                             if meta_cat is None:
                                 m = cat_pat.search(line)
                                 if m:
                                     meta_cat = int(m.group(1))
-                            if toggle_from_conditional is None:
-                                m = cond_pat.search(line)
-                                if m:
-                                    toggle_from_conditional = m.group(1)
+                            # Collect ALL toggle conditionals (files
+                            # may contain multiple rules in one file)
+                            m = cond_pat.search(line)
+                            if m:
+                                toggle = m.group(1)
+                                if toggle not in all_toggles:
+                                    all_toggles.append(toggle)
                 except (IOError, OSError):
                     continue
 
-                # Determine the key for this audit file
-                if benchmark_type == BENCHMARK_STIG:
-                    # Use filename stem as key if it matches STIG_ID pattern
-                    if re.match(r"^[A-Z]+-\d+-\d{6}$", stem):
-                        key = stem
-                    else:
-                        # Non-standard name; skip or use conditional
-                        key = meta_id or stem
-                else:
-                    # CIS: key by the toggle variable from the conditional
-                    key = toggle_from_conditional or stem
+                toggle_from_conditional = all_toggles[0] if all_toggles else None
 
-                if key:
-                    audit_map[key] = {
-                        "file": rel,
-                        "cat": dir_cat,
-                        "meta_cat": meta_cat,
-                        "rule_id": rule_id,
-                        "meta_id": meta_id,
-                        "toggle": toggle_from_conditional,
-                    }
+                # Determine the key(s) for this audit file
+                if benchmark_type == BENCHMARK_STIG:
+                    if re.match(r"^[A-Z]+-\d+-\d{6}$", stem):
+                        # Standard single-rule file — register by filename
+                        audit_map[stem] = {
+                            "file": rel,
+                            "cat": dir_cat,
+                            "meta_cat": meta_cat,
+                            "rule_id": all_rule_ids[0] if all_rule_ids else None,
+                            "meta_id": all_stig_ids[0] if all_stig_ids else None,
+                            "toggle": toggle_from_conditional,
+                        }
+                    elif all_stig_ids:
+                        # Non-standard name with metadata — register each
+                        # STIG_ID found (handles multi-rule files)
+                        for i, sid in enumerate(all_stig_ids):
+                            rid = all_rule_ids[i] if i < len(all_rule_ids) else None
+                            tog = all_toggles[i] if i < len(all_toggles) else None
+                            audit_map[sid] = {
+                                "file": rel,
+                                "cat": dir_cat,
+                                "meta_cat": meta_cat,
+                                "rule_id": rid,
+                                "meta_id": sid,
+                                "toggle": tog,
+                            }
+                    elif stem:
+                        # Fallback to filename stem
+                        audit_map[stem] = {
+                            "file": rel,
+                            "cat": dir_cat,
+                            "meta_cat": meta_cat,
+                            "rule_id": all_rule_ids[0] if all_rule_ids else None,
+                            "meta_id": None,
+                            "toggle": toggle_from_conditional,
+                        }
+                else:
+                    # CIS: register an entry for EACH toggle in the file
+                    if all_toggles:
+                        for toggle in all_toggles:
+                            audit_map[toggle] = {
+                                "file": rel,
+                                "cat": dir_cat,
+                                "meta_cat": meta_cat,
+                                "rule_id": all_rule_ids[0] if all_rule_ids else None,
+                                "meta_id": all_stig_ids[0] if all_stig_ids else None,
+                                "toggle": toggle,
+                            }
+                    else:
+                        # No conditional found; fall back to filename stem
+                        audit_map[stem] = {
+                            "file": rel,
+                            "cat": dir_cat,
+                            "meta_cat": meta_cat,
+                            "rule_id": all_rule_ids[0] if all_rule_ids else None,
+                            "meta_id": None,
+                            "toggle": None,
+                        }
 
     return audit_map
 

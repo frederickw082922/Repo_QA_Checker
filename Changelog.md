@@ -15,6 +15,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
   - Variables intentionally hardcoded in the template but absent from `defaults/main.yml` (audit-only structural vars like bootloader paths, `sshd_limited`) were reported as info findings — now silently accepted as intentional
 - **Cross-Repo Validator: Audit directory category extraction:** `cat_(\d)` regex only matched `cat_*` directories — updated to `(?:cat|section)_(\d+)` so section numbers are extracted correctly for CIS repos
 - **Cross-Repo Validator: Rule ID prefix detection:** `auto_detect_rule_id_prefix()` used hardcoded `cat_*` directories — now uses `_find_audit_subdirs()` for consistent directory discovery
+- **Cross-Repo Validator: Multi-rule audit file extraction:** `extract_audit_files()` only captured the first toggle conditional, STIG_ID, and Rule_ID per file. Audit files containing multiple rules (e.g., CIS `cis_3.5.3.3.x.yml` with 6 rules, or STIG files with multiple STIG_IDs) only registered the first rule — remaining rules were falsely flagged in Rule Key Consistency and Audit File Coverage. Now collects all toggle conditionals, STIG_IDs, and Rule_IDs per file and registers each as a separate audit map entry (applies to both CIS and STIG)
 
 ### Added
 
