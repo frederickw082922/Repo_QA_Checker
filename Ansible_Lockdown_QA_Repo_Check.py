@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.5.0"
+TOOL_VERSION = "2.6.0"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -1429,6 +1429,135 @@ def _filter_findings(findings: List[Finding], min_severity: str,
             if SEVERITY_LEVELS.get(f.severity, 0) >= min_level]
 
 
+# Short one-line descriptions displayed as subtitles under each section heading
+# in Markdown and HTML reports.
+CHECK_DESCRIPTIONS: Dict[str, str] = {
+    "YAML Lint": (
+        "Does every YAML file pass syntax and style validation?"
+    ),
+    "Ansible Lint": (
+        "Does the role follow Ansible best practices and avoid deprecated syntax?"
+    ),
+    "Spell Check": (
+        "Are there common misspellings in task names, comments, or documentation?"
+    ),
+    "Grammar Check": (
+        "Are there grammatical issues like repeated words, double spaces, "
+        "or subject-verb disagreement?"
+    ),
+    "Unused Variables": (
+        "Are all defined variables referenced, and are all referenced "
+        "variables defined?"
+    ),
+    "Variable Naming": (
+        "Do register variables follow naming conventions, and are there "
+        "any duplicate names?"
+    ),
+    "File Mode Quoting": (
+        "Are file permission mode values properly quoted as strings?"
+    ),
+    "Company Naming": (
+        "Are there outdated company/organization name references that "
+        "need updating?"
+    ),
+    "Audit Template": (
+        "Does the goss audit variable template contain any duplicate keys?"
+    ),
+    "FQCN Usage": (
+        "Are all Ansible module names fully qualified (ansible.builtin.*)?"
+    ),
+    "Rule Coverage": (
+        "Does every rule toggle have a corresponding task, and does every "
+        "task reference a defined toggle?"
+    ),
+}
+
+# Criteria descriptions explain what each check validates and why findings
+# appear under that heading.  Used by all three report generators.
+CHECK_CRITERIA: Dict[str, str] = {
+    "YAML Lint": (
+        "Runs yamllint against all YAML files in the repository to check for "
+        "syntax errors, indentation violations, line length, and style issues. "
+        "Findings appear here when yamllint reports problems, which can cause "
+        "Ansible to fail at parse time or produce unexpected behavior from "
+        "malformed YAML."
+    ),
+    "Ansible Lint": (
+        "Runs ansible-lint to check for Ansible best practices, deprecated "
+        "syntax, and common anti-patterns in tasks, handlers, and playbooks. "
+        "Findings appear here when ansible-lint detects issues such as "
+        "deprecated modules, missing names on tasks, risky file permissions, "
+        "or other violations of Ansible coding standards."
+    ),
+    "Spell Check": (
+        "Scans YAML task names, comments, Jinja2 templates, and Markdown "
+        "documentation for common misspellings using a built-in dictionary. "
+        "Findings appear here when a known misspelling is detected (e.g. "
+        "'privlege' instead of 'privilege'). Jinja2 {{ expressions }} are "
+        "stripped before analysis to avoid false positives from variable names."
+    ),
+    "Grammar Check": (
+        "Checks task names and comments for grammatical issues including "
+        "repeated words (e.g. 'the the'), multiple consecutive spaces, "
+        "missing apostrophes in contractions, and subject-verb disagreement "
+        "(e.g. 'variables is' instead of 'variables are'). Findings appear "
+        "here when these patterns are detected in user-facing text."
+    ),
+    "Unused Variables": (
+        "Two-way variable usage check. Forward: finds variables defined in "
+        "defaults/main.yml or vars/ that are never referenced in tasks, "
+        "templates, or handlers. Reverse: finds variables referenced in tasks "
+        "or templates that are not defined anywhere. Findings appear here when "
+        "dead variables add clutter or when missing definitions will cause "
+        "Ansible undefined variable errors at runtime."
+    ),
+    "Variable Naming": (
+        "Validates that register variable names follow the expected prefix "
+        "conventions (discovered_, prelim_, pre_audit_, post_audit_, set_). "
+        "Also detects duplicate register variable names within the repo and "
+        "duplicate top-level keys in defaults/main.yml. Findings appear here "
+        "when naming conventions are violated or when duplicates could cause "
+        "one value to silently override another."
+    ),
+    "File Mode Quoting": (
+        "Ensures that file permission mode values in Ansible tasks are properly "
+        "quoted as strings (e.g. '0644' not 0644). Unquoted octal modes are "
+        "interpreted as decimal integers by YAML, causing Ansible to set wrong "
+        "permissions (e.g. 0644 decimal = 01204 octal). Findings appear here "
+        "when an unquoted mode value is detected."
+    ),
+    "Company Naming": (
+        "Detects outdated or incorrect company/organization names in task names, "
+        "comments, and documentation that should be updated to the current name. "
+        "Findings appear here when legacy names (configurable via "
+        "company_old_names in .qa_config.yml) are found, indicating branding "
+        "that was not updated after a rename."
+    ),
+    "Audit Template": (
+        "Validates the Goss audit variable template "
+        "(templates/ansible_vars_goss.yml.j2) for duplicate keys. Duplicate "
+        "keys in YAML cause one value to silently override the other, leading "
+        "to audit tests using wrong variable values. Findings appear here when "
+        "the same variable name appears more than once in the template."
+    ),
+    "FQCN Usage": (
+        "Detects bare (non-fully-qualified) Ansible module names in tasks and "
+        "handlers (e.g. 'copy' instead of 'ansible.builtin.copy'). Ansible 2.10+ "
+        "requires fully qualified collection names (FQCN) for reliable module "
+        "resolution. Findings appear here when bare module names are used that "
+        "should be converted to their ansible.builtin.* equivalents."
+    ),
+    "Rule Coverage": (
+        "Ensures all rule toggle variables defined in defaults/main.yml are "
+        "referenced in at least one task when: condition, and vice-versa. "
+        "Supports both CIS ({prefix}_rule_X_X_X) and STIG ({prefix}_XXXXXX) "
+        "toggle patterns. Findings appear here when a rule toggle exists but "
+        "no task uses it (dead toggle) or when a task references a toggle "
+        "that is not defined in defaults (undefined variable at runtime)."
+    ),
+}
+
+
 class ReportGenerator:
     """Generate Markdown, HTML, or JSON reports from check results."""
 
@@ -1477,12 +1606,26 @@ class ReportGenerator:
             f"| Warnings | {s['warnings']} |",
             f"| Skipped | {s['skipped']} |",
             "",
-            "---\n",
         ]
+        lines.append("| Check | Description | Status | Findings |")
+        lines.append("|-------|-------------|--------|----------|")
+        for r in self.results:
+            desc = CHECK_DESCRIPTIONS.get(r.name, "")
+            summary_text = r.summary.replace("|", "\\|") if r.summary else ""
+            lines.append(f"| {r.name} | {desc} | {r.status} | {summary_text} |")
+        lines.append("")
+        lines.append("---\n")
+
         for r in self.results:
             icon = {"PASS": "[PASS]", "FAIL": "[FAIL]",
                     "WARN": "[WARN]", "SKIP": "[SKIP]"}[r.status]
             lines.append(f"## {icon} {r.name}\n")
+            desc = CHECK_DESCRIPTIONS.get(r.name, "")
+            if desc:
+                lines.append(f"*{desc}*\n")
+            criteria = CHECK_CRITERIA.get(r.name, "")
+            if criteria:
+                lines.append(f"> **Why these findings?** {criteria}\n")
             lines.append(f"**Status:** {r.status}  ")
             if r.summary:
                 lines.append(f"**Summary:** {r.summary}\n")
@@ -1501,6 +1644,10 @@ class ReportGenerator:
                         f"*{len(filtered) - 200} more findings omitted* |")
             lines.append("")
             lines.append("---\n")
+        lines.append(
+            f"*Generated by Ansible_Lockdown_QA_Repo_Check.py v{TOOL_VERSION} "
+            f"for {self.meta.repo_name} on {self.meta.date}*\n"
+        )
         return "\n".join(lines) + "\n"
 
     # -- HTML ---------------------------------------------------------------
@@ -1533,12 +1680,49 @@ class ReportGenerator:
                     "<table><tr><th>Severity</th><th>File</th>"
                     "<th>Line</th><th>Description</th></tr>\n"
                     f"{rows}</table>")
+            criteria = CHECK_CRITERIA.get(r.name, "")
+            criteria_html = ""
+            if criteria:
+                criteria_html = (
+                    f"<p style='background:#f0f4f8;border-left:3px solid #4a90d9;"
+                    f"padding:0.6rem 0.8rem;margin:0.5rem 0 0.75rem;font-size:0.85rem;"
+                    f"color:#3a4a5a;border-radius:0 4px 4px 0;line-height:1.5'>"
+                    f"<b>Why these findings?</b> {_html_escape(criteria)}</p>"
+                )
+            desc = CHECK_DESCRIPTIONS.get(r.name, "")
+            desc_html = (
+                f"<div style='font-size:0.85rem;color:var(--text-light);"
+                f"font-style:italic;margin-top:0.15rem'>{_html_escape(desc)}</div>"
+            ) if desc else ""
+            collapsed = " collapsed" if r.status == "PASS" and not filtered else ""
             sections.append(
-                f"<div class='section'>"
-                f"<div class='section-header'>"
-                f"<h2>{_html_escape(r.name)}</h2>"
-                f"<span class='badge {badge_cls}'>{r.status}</span></div>"
-                f"<p>{_html_escape(r.summary)}</p>{table}</div>\n")
+                f"<div class='check-section{collapsed}'>"
+                f"<div class='check-header' onclick='this.parentElement.classList.toggle(\"collapsed\")'>"
+                f"<span><span class='check-title'>{_html_escape(r.name)}</span>"
+                f"{desc_html}</span>"
+                f"<span><span class='badge {badge_cls}'>{r.status}</span> "
+                f"<span class='toggle-arrow'>&#9660;</span></span></div>"
+                f"<div class='check-body'>"
+                f"{criteria_html}"
+                f"<p>{_html_escape(r.summary)}</p>{table}</div></div>\n")
+
+        # Build overview table
+        overview_rows = []
+        for r in self.results:
+            bc = f"badge-{r.status.lower()}"
+            d = CHECK_DESCRIPTIONS.get(r.name, "")
+            overview_rows.append(
+                f"<tr><td>{_html_escape(r.name)}</td>"
+                f"<td style='font-size:0.85rem;color:var(--text-light)'>{_html_escape(d)}</td>"
+                f"<td><span class='badge {bc}'>{r.status}</span></td>"
+                f"<td>{_html_escape(r.summary)}</td></tr>"
+            )
+        overview_table = (
+            "<div style='margin-bottom:1.5rem;overflow-x:auto'><table>"
+            "<tr><th>Check</th><th>Description</th><th>Status</th><th>Findings</th></tr>\n"
+            + "\n".join(overview_rows)
+            + "</table></div>\n"
+        )
 
         return HTML_TEMPLATE.format(
             repo_name=_html_escape(self.meta.repo_name),
@@ -1549,7 +1733,7 @@ class ReportGenerator:
             benchmark_version=_html_escape(self.meta.benchmark_version),
             total=s["total"], passed=s["passed"], failed=s["failed"],
             warnings=s["warnings"], skipped=s["skipped"],
-            sections="\n".join(sections))
+            sections=overview_table + "\n".join(sections))
 
     # -- JSON ---------------------------------------------------------------
 
@@ -1568,7 +1752,9 @@ class ReportGenerator:
             "checks": [
                 {
                     "name": r.name,
+                    "description": CHECK_DESCRIPTIONS.get(r.name, ""),
                     "status": r.status,
+                    "criteria": CHECK_CRITERIA.get(r.name, ""),
                     "summary": r.summary,
                     "elapsed_seconds": round(r.elapsed, 3),
                     "findings": [
@@ -1601,25 +1787,39 @@ HTML_TEMPLATE = textwrap.dedent("""\
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QA Report: {repo_name}</title>
 <style>
+  :root {{
+    --pass: #28a745; --fail: #dc3545; --warn: #ffc107; --skip: #6c757d;
+    --bg: #f5f5f5; --card: #fff; --border: #dee2e6; --text: #1a1a2e;
+    --text-light: #6c757d; --primary: #16213e;
+  }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
          sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px;
-         background: #f5f5f5; color: #1a1a2e; }}
-  h1 {{ border-bottom: 3px solid #16213e; padding-bottom: 10px; }}
+         background: var(--bg); color: var(--text); }}
+  h1 {{ border-bottom: 3px solid var(--primary); padding-bottom: 10px; }}
   h2 {{ margin-top: 0; }}
-  .metadata {{ background: #fff; padding: 15px; border-radius: 8px;
+  .metadata {{ background: var(--card); padding: 15px; border-radius: 8px;
                box-shadow: 0 2px 4px rgba(0,0,0,.1); margin-bottom: 20px; }}
   .metadata span {{ margin-right: 20px; }}
   table {{ width: 100%; border-collapse: collapse; margin: 15px 0;
-           background: #fff; border-radius: 8px; overflow: hidden;
+           background: var(--card); border-radius: 8px; overflow: hidden;
            box-shadow: 0 2px 4px rgba(0,0,0,.1); }}
-  th {{ background: #16213e; color: #fff; padding: 12px 15px;
+  th {{ background: var(--primary); color: #fff; padding: 12px 15px;
        text-align: left; }}
-  td {{ padding: 10px 15px; border-bottom: 1px solid #eee; }}
+  td {{ padding: 10px 15px; border-bottom: 1px solid var(--border); }}
   tr:hover {{ background: #f8f9fa; }}
-  .section {{ background: #fff; padding: 20px; border-radius: 8px;
-              box-shadow: 0 2px 4px rgba(0,0,0,.1); margin-bottom: 20px; }}
-  .section-header {{ display: flex; justify-content: space-between;
-                     align-items: center; }}
+  .check-section {{ background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,.1); margin-bottom: 20px;
+                    overflow: hidden; }}
+  .check-header {{ display: flex; justify-content: space-between;
+                   align-items: center; padding: 15px 20px; cursor: pointer;
+                   user-select: none; }}
+  .check-header:hover {{ background: #f8f9fa; }}
+  .check-title {{ font-weight: 600; font-size: 1.1em; }}
+  .check-body {{ padding: 0 20px 20px; }}
+  .check-body table {{ margin-top: 0.5rem; }}
+  .toggle-arrow {{ transition: transform 0.2s; font-size: 0.8rem; color: var(--text-light); }}
+  .check-section.collapsed .toggle-arrow {{ transform: rotate(-90deg); }}
+  .check-section.collapsed .check-body {{ display: none; }}
   .badge {{ padding: 4px 12px; border-radius: 12px; font-size: .85em;
             font-weight: bold; }}
   .badge-pass {{ background: #d4edda; color: #155724; }}
@@ -1635,6 +1835,13 @@ HTML_TEMPLATE = textwrap.dedent("""\
   .severity-info {{ background: #d1ecf1; color: #0c5460; padding: 2px 8px;
                     border-radius: 4px; font-size: .85em; }}
   .summary-table td:first-child {{ font-weight: bold; }}
+  footer {{ margin-top: 2rem; text-align: center; font-size: 0.8rem; color: var(--text-light); }}
+  @media print {{
+    body {{ background: #fff; padding: 10px; }}
+    .check-section {{ box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }}
+    .check-section.collapsed .check-body {{ display: block; }}
+    .check-section.collapsed .toggle-arrow {{ transform: none; }}
+  }}
 </style>
 </head>
 <body>
@@ -1658,6 +1865,7 @@ HTML_TEMPLATE = textwrap.dedent("""\
 </table>
 </div>
 {sections}
+<footer>Generated by <b>Ansible_Lockdown_QA_Repo_Check.py</b> v{tool_version} for <b>{repo_name}</b> on {date}</footer>
 </body>
 </html>
 """)

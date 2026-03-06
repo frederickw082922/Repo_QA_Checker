@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.5.0
+**Version:** 2.6.0
 
 ---
 
@@ -211,7 +211,7 @@ python3 Ansible_Lockdown_QA_Repo_Check.py -f md
 # Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.md
 ```
 
-Generates a Markdown file with a summary table and per-check sections containing findings tables.
+Generates a Markdown file with a summary table and per-check sections containing an italic **description subtitle** (what the check asks), a **"Why these findings?"** criteria block (detailed explanation), and findings tables.
 
 ### HTML
 
@@ -220,7 +220,7 @@ python3 Ansible_Lockdown_QA_Repo_Check.py -f html
 # Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.html
 ```
 
-Generates a styled HTML page with color-coded severity badges, suitable for viewing in a browser.
+Generates a styled HTML page with color-coded severity badges, **collapsible per-check sections** (PASS checks start collapsed, click header to toggle), per-check **description subtitles**, and **"Why these findings?"** criteria callout boxes. Uses CSS custom properties for theming. Includes **print-friendly** styles and a generation footer. Suitable for viewing in a browser.
 
 ### JSON
 
@@ -229,7 +229,7 @@ python3 Ansible_Lockdown_QA_Repo_Check.py -f json
 # Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.json
 ```
 
-Generates structured JSON output including metadata, summary counts, per-check elapsed times, and all findings. Useful for programmatic consumption and CI pipelines.
+Generates structured JSON output including metadata, summary counts, per-check elapsed times, `"criteria"` (detailed explanation) fields per check, and all findings. Useful for programmatic consumption and CI pipelines.
 
 ### Custom Output Path
 
@@ -426,7 +426,7 @@ Add the following to your Ansible role's `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.5.0  # pin to a release tag
+  rev: v2.6.0  # pin to a release tag
   hooks:
     - id: ansible-lockdown-qa
 ```
@@ -439,7 +439,7 @@ You can override the default `args` in your `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.5.0
+  rev: v2.6.0
   hooks:
     - id: ansible-lockdown-qa
       args: ['-d', '.', '--console', '--no-report', '--skip', 'grammar']
@@ -451,7 +451,7 @@ By default, the `yamllint` and `ansible-lint` checks are skipped gracefully when
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.5.0
+  rev: v2.6.0
   hooks:
     - id: ansible-lockdown-qa
       additional_dependencies: ['yamllint', 'ansible-lint']
