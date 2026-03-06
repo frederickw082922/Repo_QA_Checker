@@ -206,7 +206,7 @@ python3 audit_compare.py pre.json post.json
 
 ### Markdown
 
-Markdown report with tables and headings, suitable for documentation, pull requests, and wikis.
+Markdown report with tables and headings, suitable for documentation, pull requests, and wikis. Each section includes an italic **description** explaining its purpose and a blockquote with contextual detail for Fixed, Regressed, and Still Failed sections.
 
 ```bash
 python3 audit_compare.py pre.json post.json --format markdown --output report.md
@@ -227,6 +227,7 @@ python3 audit_compare.py pre.json post.json --format html
 Key visual elements:
 
 - Color-coded badges for each change category (green for fixed, red for regressed, yellow for still-failed)
+- Per-section **description callout boxes** with color-coded borders (green for Fixed, red for Regressed, amber for Still Failed)
 - Collapsible `<details>` sections per control ID -- regressed controls default to open
 - Expected vs found values shown inline for regressed and still-failed tests
 - Positive/negative change values highlighted in the summary table
@@ -234,10 +235,11 @@ Key visual elements:
 
 ### JSON
 
-Structured JSON output with metadata, summary statistics, and per-control detail. Suitable for programmatic consumption and CI pipelines.
+Structured JSON output with metadata, summary statistics, and per-control detail. Suitable for programmatic consumption and CI pipelines. Includes a `"section_descriptions"` dictionary mapping each report section to its description.
 
 Key JSON fields:
 
+- `section_descriptions` -- descriptions for each report section (Summary, Changes Breakdown, Fixed/Regressed/Still Failed)
 - `metadata.benchmark` -- auto-detected or user-specified benchmark name
 - `summary.duration` -- scan duration in both raw nanoseconds and formatted strings
 - `summary.compliance_change` -- pre/post compliance percentages

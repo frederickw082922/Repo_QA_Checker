@@ -445,6 +445,8 @@ Generates a Markdown report with:
 - Header metadata (repos, date, detected prefixes, benchmark type, benchmark version, git branches)
 - Summary table (total/passed/failed/warnings/skipped)
 - Per-check status table
+- Per-check **description subtitle** summarizing what the check asks (italic one-liner)
+- Per-check **"Why these findings?"** criteria block explaining the check logic in detail
 - Per-check findings tables (up to 200 findings per check)
 
 ### HTML
@@ -459,6 +461,8 @@ Self-contained HTML report with embedded CSS. Features:
 - Summary cards with colour-coded counts (pass/fail/warn/skip)
 - Overview table with status badges
 - Collapsible per-check detail sections (PASS checks start collapsed)
+- Per-check **description subtitle** in each collapsible header
+- Per-check **"Why these findings?"** criteria callout (styled box explaining the check logic)
 - Colour-coded severity labels (error=red, warning=amber, info=teal)
 - Monospace file paths, sticky table headers, responsive layout
 - No external dependencies — opens in any browser
@@ -470,7 +474,7 @@ python3 cross_repo_validator.py -r repo --format json
 # Creates: cross_repo_report.json
 ```
 
-Structured JSON with metadata, summary counts, and per-check findings arrays. Suitable for programmatic consumption and CI pipelines.
+Structured JSON with metadata, summary counts, and per-check findings arrays. Each check object includes a `"description"` (short one-liner) and `"criteria"` (detailed explanation) field. Suitable for programmatic consumption and CI pipelines.
 
 ### Custom Output Path
 
@@ -655,6 +659,15 @@ python3 scripts/cross_repo_validator.py \
 ```
 ## [WARN] Rule Toggle Sync
 
+*Are rule toggle variables consistently defined across defaults, goss
+template, audit vars, and audit test conditionals?*
+
+> **Why these findings?** Verifies that every rule toggle variable is
+> consistently defined across all four locations: defaults/main.yml, the
+> Jinja2 goss template, the audit vars file, and the audit test file
+> conditionals. Findings appear here when a toggle exists in one location
+> but is missing from another.
+
 | Severity | File | Line | Description |
 |----------|------|------|-------------|
 | warning | `vars/STIG.yml` | - | In defaults but missing from vars/STIG.yml: 'az2023stig_001295' |
@@ -662,17 +675,26 @@ python3 scripts/cross_repo_validator.py \
 
 ## [FAIL] Rule_ID Consistency
 
+*Do SV-* Rule_ID values in remediation task tags match the Rule_ID
+metadata in the corresponding audit files?*
+
+> **Why these findings?** Compares the SV-* Rule_ID values between
+> remediation task tags and audit file metadata comments. Findings appear
+> here when the Rule_ID in a task file does not match the corresponding
+> audit file.
+
 | Severity | File | Line | Description |
 |----------|------|------|-------------|
 | error | `cat_2/AZLX-23-000xxx/AZLX-23-000135.yml` | - | Rule_ID mismatch for AZLX-23-000135: task='SV-273996r1119976_rule' vs audit='SV-274000r1119991_rule' |
 
-## [FAIL] Rule Key Consistency
-
-| Severity | File | Line | Description |
-|----------|------|------|-------------|
-| error | `cat_2/AZLX-23-002xxx/AZLX-23-002450.yml` | - | Audit filename/metadata STIG_ID mismatch: file='AZLX-23-002450' vs metadata='AZLX-23-002445' |
-
 ## [WARN] Config Variable Parity
+
+*Do non-toggle configuration variables (paths, ciphers, policies) have
+the same values in defaults and audit vars?*
+
+> **Why these findings?** Compares non-toggle configuration variables
+> between defaults/main.yml and the audit vars file. Findings appear here
+> when the same variable has different values in each file.
 
 | Severity | File | Line | Description |
 |----------|------|------|-------------|
@@ -740,7 +762,7 @@ Each check receives the pre-extracted data and produces a `CheckResult` containi
 
 ### Report Phase
 
-Results are formatted into Markdown or JSON. Findings are capped at 200 per check in Markdown to keep reports readable.
+Results are formatted into Markdown, HTML, or JSON. Each check section includes a **description subtitle** (short question summarizing the check) and a **"Why these findings?"** criteria block (detailed explanation of the check logic and what causes findings). Findings are capped at 200 per check in Markdown/HTML to keep reports readable.
 
 ---
 

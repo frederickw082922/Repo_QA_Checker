@@ -4,7 +4,24 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
-## 2.6.0 - 2026-03-04
+## 2.6.0 - 2026-03-06
+
+### Added
+
+- **Cross-Repo Validator: Per-check section descriptions and criteria in reports:** Each check section in Markdown, HTML, and JSON reports now includes a short **description subtitle** summarizing what the check asks (e.g. *"Does every rule toggle have an audit test file?"*) and a detailed **"Why these findings?"** criteria block explaining the check logic and why findings appear.
+  - Markdown: italic subtitle under each heading + `> **Why these findings?** ...` blockquote
+  - HTML: italic subtitle in collapsible header + styled callout box with blue left border
+  - JSON: `"description"` (short) and `"criteria"` (detailed) string fields per check object
+- **QA Repo Check: Per-check section descriptions and criteria in reports:** Same description + criteria feature added to the main QA tool. All 11 checks now include an italic subtitle and detailed criteria text in Markdown, HTML, and JSON reports.
+  - Markdown: italic subtitle under each heading + `> **Why these findings?** ...` blockquote
+  - HTML: italic subtitle in collapsible header + styled callout box with blue left border
+  - JSON: `"description"` and `"criteria"` string fields added to each check object
+- **QA Repo Check: Collapsible HTML sections:** HTML report check sections are now collapsible (click-to-toggle), matching the cross-repo validator. PASS checks with no findings start collapsed, toggle arrows rotate on collapse, and hover highlights the header row.
+- **Overview tables with description column:** Both the QA Repo Check and Cross-Repo Validator summary/overview tables now include a Description column showing the short one-liner for each check.
+- **Audit Compare: Section descriptions in reports:** Each report section (Summary, Changes Breakdown, Fixed Controls, Regressed Controls, Still Failed Controls) now includes an italic description explaining the section's purpose.
+  - Markdown: italic description under section headings + `>` blockquote for detail sections
+  - HTML: color-coded callout boxes (green for Fixed, red for Regressed, amber for Still Failed)
+  - JSON: `"section_descriptions"` dictionary added to the report object
 
 ### Fixed
 
@@ -16,6 +33,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 - **Cross-Repo Validator: Audit directory category extraction:** `cat_(\d)` regex only matched `cat_*` directories — updated to `(?:cat|section)_(\d+)` so section numbers are extracted correctly for CIS repos
 - **Cross-Repo Validator: Rule ID prefix detection:** `auto_detect_rule_id_prefix()` used hardcoded `cat_*` directories — now uses `_find_audit_subdirs()` for consistent directory discovery
 - **Cross-Repo Validator: Multi-rule audit file extraction:** `extract_audit_files()` only captured the first toggle conditional, STIG_ID, and Rule_ID per file. Audit files containing multiple rules (e.g., CIS `cis_3.5.3.3.x.yml` with 6 rules, or STIG files with multiple STIG_IDs) only registered the first rule — remaining rules were falsely flagged in Rule Key Consistency and Audit File Coverage. Now collects all toggle conditionals, STIG_IDs, and Rule_IDs per file and registers each as a separate audit map entry (applies to both CIS and STIG)
+- **Cross-Repo Validator: Dotted toggle names in task `when:` conditions (CIS):** Some repos use dotted notation in `when:` conditions (e.g., `amazon2cis_rule_3.4.3.5` instead of `amazon2cis_rule_3_4_3_5`). The task extraction regex only matched underscores, stopping at the first dot and producing truncated keys like `amazon2cis_rule_3`. Now matches dots in toggle names and normalizes them to underscores
 
 ### Added
 

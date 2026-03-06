@@ -211,7 +211,7 @@ python3 Ansible_Lockdown_QA_Repo_Check.py -f md
 # Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.md
 ```
 
-Generates a Markdown file with a summary table and per-check sections containing findings tables.
+Generates a Markdown file with a summary table and per-check sections containing an italic **description subtitle** (what the check asks), a **"Why these findings?"** criteria block (detailed explanation), and findings tables.
 
 ### HTML
 
@@ -220,7 +220,7 @@ python3 Ansible_Lockdown_QA_Repo_Check.py -f html
 # Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.html
 ```
 
-Generates a styled HTML page with color-coded severity badges, suitable for viewing in a browser.
+Generates a styled HTML page with color-coded severity badges, **collapsible per-check sections** (PASS checks start collapsed, click header to toggle), per-check **description subtitles**, and **"Why these findings?"** criteria callout boxes. Suitable for viewing in a browser.
 
 ### JSON
 
@@ -229,7 +229,7 @@ python3 Ansible_Lockdown_QA_Repo_Check.py -f json
 # Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.json
 ```
 
-Generates structured JSON output including metadata, summary counts, per-check elapsed times, and all findings. Useful for programmatic consumption and CI pipelines.
+Generates structured JSON output including metadata, summary counts, per-check elapsed times, `"criteria"` (detailed explanation) fields per check, and all findings. Useful for programmatic consumption and CI pipelines.
 
 ### Custom Output Path
 

@@ -361,6 +361,36 @@ def format_text_report(comparison, pre_summary, post_summary, pre_file, post_fil
     return "\n".join(lines)
 
 
+# Section descriptions and criteria for report headings.
+SECTION_DESCRIPTIONS = {
+    "Summary": (
+        "Side-by-side comparison of pre- and post-remediation audit totals, "
+        "pass/fail counts, and compliance rate."
+    ),
+    "Changes Breakdown": (
+        "High-level count of controls in each change category — use this to "
+        "quickly assess whether remediation improved, regressed, or had no "
+        "effect on compliance."
+    ),
+    "Fixed Controls": (
+        "Controls that failed in the pre-audit but pass in the post-audit. "
+        "These represent successful remediation — the hardening tasks corrected "
+        "the configuration and the audit now confirms compliance."
+    ),
+    "Regressed Controls": (
+        "Controls that passed in the pre-audit but fail in the post-audit. "
+        "These are regressions — remediation or other changes broke a "
+        "previously compliant configuration. Investigate immediately as these "
+        "represent net-negative security impact."
+    ),
+    "Still Failed Controls": (
+        "Controls that failed in both the pre- and post-audit. Remediation "
+        "did not resolve these — they require manual intervention, "
+        "configuration changes, or exemption documentation."
+    ),
+}
+
+
 def format_markdown_report(comparison, pre_summary, post_summary, pre_file, post_file, benchmark="Lockdown Goss Audit", summary_only=False):
     """Generate a Markdown format report."""
     lines = []
@@ -376,6 +406,8 @@ def format_markdown_report(comparison, pre_summary, post_summary, pre_file, post
 
     # Summary table
     lines.append("## Summary")
+    lines.append("")
+    lines.append(f"*{SECTION_DESCRIPTIONS['Summary']}*")
     lines.append("")
     lines.append("| Metric | Pre-Audit | Post-Audit | Change |")
     lines.append("| ------ | --------: | ---------: | -----: |")
@@ -395,6 +427,8 @@ def format_markdown_report(comparison, pre_summary, post_summary, pre_file, post
     # Changes breakdown
     lines.append("## Changes Breakdown")
     lines.append("")
+    lines.append(f"*{SECTION_DESCRIPTIONS['Changes Breakdown']}*")
+    lines.append("")
     lines.append(f"- **Fixed** (Failed -> Passed): {len(comparison['fixed'])}")
     lines.append(f"- **Regressed** (Passed -> Failed): {len(comparison['regressed'])}")
     lines.append(f"- **Still Failed**: {len(comparison['still_failed'])}")
@@ -409,6 +443,8 @@ def format_markdown_report(comparison, pre_summary, post_summary, pre_file, post
     if comparison['fixed']:
         lines.append("## Fixed Controls")
         lines.append("")
+        lines.append(f"> {SECTION_DESCRIPTIONS['Fixed Controls']}")
+        lines.append("")
         grouped = group_by_control(comparison['fixed'])
         for control_id, items in grouped.items():
             lines.append(f"### {control_id}")
@@ -422,7 +458,7 @@ def format_markdown_report(comparison, pre_summary, post_summary, pre_file, post
     if comparison['regressed']:
         lines.append("## Regressed Controls")
         lines.append("")
-        lines.append("> **Warning:** These controls passed before but now fail!")
+        lines.append(f"> **Warning:** {SECTION_DESCRIPTIONS['Regressed Controls']}")
         lines.append("")
         grouped = group_by_control(comparison['regressed'])
         for control_id, items in grouped.items():
@@ -439,7 +475,7 @@ def format_markdown_report(comparison, pre_summary, post_summary, pre_file, post
     if comparison['still_failed']:
         lines.append("## Still Failed Controls")
         lines.append("")
-        lines.append("These controls require manual remediation or configuration changes.")
+        lines.append(f"> {SECTION_DESCRIPTIONS['Still Failed Controls']}")
         lines.append("")
         grouped = group_by_control(comparison['still_failed'])
         for control_id, items in grouped.items():
@@ -489,6 +525,7 @@ def format_json_report(comparison, pre_summary, post_summary, pre_file, post_fil
             'still_passed_count': len(comparison['still_passed']),
             'skipped_count': len(comparison['skipped']),
         },
+        'section_descriptions': SECTION_DESCRIPTIONS,
     }
     if not summary_only:
         report['fixed'] = [{'control_id': i.get('pre', {}).get('control_id', ''), 'title': i.get('pre', {}).get('title', '')} for i in comparison['fixed']]
@@ -876,6 +913,8 @@ def format_html_report(comparison, pre_summary, post_summary, pre_file, post_fil
 
     sections.append(
         f"<div class='section' id='section-summary'>\n<h2>Summary</h2>\n"
+        f"<p style='font-size:0.85rem;color:#6c757d;font-style:italic;margin:0.25rem 0 0.75rem'>"
+        f"{_esc(SECTION_DESCRIPTIONS['Summary'])}</p>\n"
         f"<table class='summary-table' data-sortable>\n"
         f"<tr><th>Metric</th><th class='num'>Pre-Audit</th>"
         f"<th class='num'>Post-Audit</th><th class='num'>Change</th></tr>\n"
@@ -898,6 +937,8 @@ def format_html_report(comparison, pre_summary, post_summary, pre_file, post_fil
                            f"<td class='num'><span class='badge {badge_cls}'>{count}</span></td></tr>\n")
     sections.append(
         f"<div class='section' id='section-breakdown'>\n<h2>Changes Breakdown</h2>\n"
+        f"<p style='font-size:0.85rem;color:#6c757d;font-style:italic;margin:0.25rem 0 0.75rem'>"
+        f"{_esc(SECTION_DESCRIPTIONS['Changes Breakdown'])}</p>\n"
         f"<table data-sortable>\n<tr><th>Category</th><th class='num'>Count</th></tr>\n"
         f"{breakdown_html}</table>\n</div>\n")
 
@@ -931,6 +972,10 @@ def format_html_report(comparison, pre_summary, post_summary, pre_file, post_fil
             f"<div class='section' id='section-fixed' data-category='fixed'>\n"
             f"<div class='section-header'><h2>Fixed Controls</h2>"
             f"<span class='badge badge-fixed'>{len(comparison['fixed'])} tests</span></div>\n"
+            f"<p style='background:#f0f4f8;border-left:3px solid #28a745;"
+            f"padding:0.6rem 0.8rem;margin:0 0 0.75rem;font-size:0.85rem;"
+            f"color:#3a4a5a;border-radius:0 4px 4px 0;line-height:1.5'>"
+            f"{_esc(SECTION_DESCRIPTIONS['Fixed Controls'])}</p>\n"
             f"{controls_html}</div>\n")
 
     # --- Regressed controls ---
@@ -958,6 +1003,10 @@ def format_html_report(comparison, pre_summary, post_summary, pre_file, post_fil
             f"<div class='warning-banner'>Regressed Controls &mdash; Passed &rarr; Failed</div>\n"
             f"<div class='section-header'><h2>Regressed Controls</h2>"
             f"<span class='badge badge-regressed'>{len(comparison['regressed'])} tests</span></div>\n"
+            f"<p style='background:#f0f4f8;border-left:3px solid #dc3545;"
+            f"padding:0.6rem 0.8rem;margin:0 0 0.75rem;font-size:0.85rem;"
+            f"color:#3a4a5a;border-radius:0 4px 4px 0;line-height:1.5'>"
+            f"{_esc(SECTION_DESCRIPTIONS['Regressed Controls'])}</p>\n"
             f"{controls_html}</div>\n")
 
     # --- Still failed controls ---
@@ -984,7 +1033,10 @@ def format_html_report(comparison, pre_summary, post_summary, pre_file, post_fil
             f"<div class='section' id='section-still-failed' data-category='still_failed'>\n"
             f"<div class='section-header'><h2>Still Failed Controls</h2>"
             f"<span class='badge badge-still-failed'>{len(comparison['still_failed'])} tests</span></div>\n"
-            f"<p>These controls require manual remediation or configuration changes.</p>\n"
+            f"<p style='background:#f0f4f8;border-left:3px solid #ffc107;"
+            f"padding:0.6rem 0.8rem;margin:0 0 0.75rem;font-size:0.85rem;"
+            f"color:#3a4a5a;border-radius:0 4px 4px 0;line-height:1.5'>"
+            f"{_esc(SECTION_DESCRIPTIONS['Still Failed Controls'])}</p>\n"
             f"{controls_html}</div>\n")
 
     title = f"{_esc(benchmark)} Comparison Report"
