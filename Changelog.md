@@ -29,6 +29,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ### Fixed
 
+- **Audit Compare: Bounded regular expressions:** All regex patterns in `audit_compare.py` now use bounded quantifiers (`\d{1,10}`, `{1,10}`) instead of unbounded `\d+` / `+` to eliminate polynomial backtracking warnings from security scanners. Alternation patterns also refactored to avoid shared prefixes across branches.
 - **Cross-Repo Validator: Rule Key Consistency false positives (CIS):** `extract_task_data()` used hardcoded `cat_1/cat_2/cat_3` directory names, causing zero tasks to be found for CIS repos that use `section_*` directories. All audit rules were falsely flagged as "Rule found in audit but no task." Task subdirectory discovery now dynamically finds both `cat_*` and `section_*` directories, matching the audit extraction logic.
 - **Cross-Repo Validator: Template Variable Sync false positives:** Reduced false positives from three sources:
   - Jinja2 control blocks (`{% if %}`, `{% for %}`) on value lines were incorrectly classified as hardcoded — now skipped during extraction
