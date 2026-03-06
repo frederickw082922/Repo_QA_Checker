@@ -47,7 +47,7 @@ def detect_benchmark_name(pre_file, post_file):
         if match:
             raw = match.group(1)
             # Format nicely: "RHEL10 CIS", "Ubuntu2204 STIG", etc.
-            inner = re.match(r'([a-zA-Z]+)(\d+)(cis|stig)', raw, re.IGNORECASE)
+            inner = re.match(r'([a-zA-Z]+?)(\d+)(cis|stig)', raw, re.IGNORECASE)
             if inner:
                 os_name = inner.group(1).upper()
                 version = inner.group(2)
