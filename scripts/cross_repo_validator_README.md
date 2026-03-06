@@ -464,7 +464,10 @@ Self-contained HTML report with embedded CSS. Features:
 - Per-check **description subtitle** in each collapsible header
 - Per-check **"Why these findings?"** criteria callout (styled box explaining the check logic)
 - Colour-coded severity labels (error=red, warning=amber, info=teal)
+- Pastel status badges consistent with the QA tool and Audit Compare
 - Monospace file paths, sticky table headers, responsive layout
+- **Print-friendly** `@media print` styles (expands collapsed sections, removes shadows)
+- Generation footer with tool version and date
 - No external dependencies — opens in any browser
 
 ### JSON

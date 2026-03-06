@@ -1723,14 +1723,14 @@ def generate_html(metadata: ReportMetadata,
   .check-header:hover { background: var(--bg); }
   .check-title { font-weight: 600; font-size: 0.95rem; }
   .badge { display: inline-block; padding: 0.15em 0.55em; border-radius: 4px;
-           font-size: 0.75rem; font-weight: 700; color: #fff; }
-  .badge-pass { background: var(--pass); }
-  .badge-fail { background: var(--fail); }
-  .badge-warn { background: var(--warn); color: #212529; }
-  .badge-skip { background: var(--skip); }
-  .sev-error { color: var(--fail); font-weight: 600; }
-  .sev-warning { color: #b8860b; font-weight: 600; }
-  .sev-info { color: #0c7c84; font-weight: 600; }
+           font-size: 0.75rem; font-weight: 700; }
+  .badge-pass { background: #d4edda; color: #155724; }
+  .badge-fail { background: #f8d7da; color: #721c24; }
+  .badge-warn { background: #fff3cd; color: #856404; }
+  .badge-skip { background: #e2e3e5; color: #383d41; }
+  .sev-error { color: #721c24; font-weight: 600; }
+  .sev-warning { color: #856404; font-weight: 600; }
+  .sev-info { color: #0c5460; font-weight: 600; }
   .check-body { padding: 0 1rem 1rem; }
   .check-body table { margin-top: 0.5rem; }
   .file-col { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
@@ -1742,6 +1742,10 @@ def generate_html(metadata: ReportMetadata,
                      overflow: hidden; margin-bottom: 1.5rem; }
   .truncated { font-style: italic; color: var(--text-light); padding: 0.5rem 0.75rem; }
   footer { margin-top: 2rem; text-align: center; font-size: 0.8rem; color: var(--text-light); }
+  @media print { body { background: #fff; padding: 10px; }
+    .check-section { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
+    .check-section.collapsed .check-body { display: block; }
+    .check-section.collapsed .toggle-arrow { transform: none; } }
 </style>
 </head>
 <body>

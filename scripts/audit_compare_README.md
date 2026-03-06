@@ -206,7 +206,7 @@ python3 audit_compare.py pre.json post.json
 
 ### Markdown
 
-Markdown report with tables and headings, suitable for documentation, pull requests, and wikis. Each section includes an italic **description** explaining its purpose and a blockquote with contextual detail for Fixed, Regressed, and Still Failed sections.
+Markdown report with tables and headings, suitable for documentation, pull requests, and wikis. Each section includes an italic **description** explaining its purpose and a blockquote with contextual detail for Fixed, Regressed, and Still Failed sections. Ends with a generation footer showing tool version, benchmark name, and date.
 
 ```bash
 python3 audit_compare.py pre.json post.json --format markdown --output report.md
@@ -216,7 +216,7 @@ python3 audit_compare.py pre.json post.json --format markdown --output report.md
 
 ### HTML
 
-Styled, interactive HTML page with color-coded badges, collapsible control groups, a summary table, and a JavaScript-powered toolbar. Opens directly in a browser -- no external CSS or JavaScript files required. Visual styling matches the main QA tool's HTML reports.
+Styled, interactive HTML page with color-coded badges, collapsible control groups, a summary table, a JavaScript-powered toolbar, and a generation footer. Opens directly in a browser -- no external CSS or JavaScript files required. Visual styling matches the main QA tool's HTML reports.
 
 ```bash
 python3 audit_compare.py pre.json post.json --format html

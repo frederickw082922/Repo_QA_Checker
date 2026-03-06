@@ -220,7 +220,7 @@ python3 Ansible_Lockdown_QA_Repo_Check.py -f html
 # Creates: qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.html
 ```
 
-Generates a styled HTML page with color-coded severity badges, **collapsible per-check sections** (PASS checks start collapsed, click header to toggle), per-check **description subtitles**, and **"Why these findings?"** criteria callout boxes. Suitable for viewing in a browser.
+Generates a styled HTML page with color-coded severity badges, **collapsible per-check sections** (PASS checks start collapsed, click header to toggle), per-check **description subtitles**, and **"Why these findings?"** criteria callout boxes. Uses CSS custom properties for theming. Includes **print-friendly** styles and a generation footer. Suitable for viewing in a browser.
 
 ### JSON
 
