@@ -38,7 +38,7 @@ def detect_benchmark_name(pre_file, post_file):
     """
     # Common benchmark prefixes in Ansible-Lockdown audit filenames
     pattern = re.compile(
-        r'((?:rhel|ubuntu|amazon|debian|suse)\d+(?:cis|stig))',
+        r'((?:rhel|ubuntu|amazon|debian|suse)\d{1,10}(?:cis|stig))',
         re.IGNORECASE
     )
     for filepath in (pre_file, post_file):
@@ -47,7 +47,7 @@ def detect_benchmark_name(pre_file, post_file):
         if match:
             raw = match.group(1)
             # Format nicely: "RHEL10 CIS", "Ubuntu2204 STIG", etc.
-            inner = re.match(r'([a-zA-Z]+?)(\d+)(cis|stig)', raw, re.IGNORECASE)
+            inner = re.match(r'([a-zA-Z]+?)(\d{1,10})(cis|stig)', raw, re.IGNORECASE)
             if inner:
                 os_name = inner.group(1).upper()
                 version = inner.group(2)
@@ -64,7 +64,7 @@ def detect_benchmark_version(pre_file, post_file):
     Falls back to 'unknown' if no match.
     """
     # Match common version patterns: v1_0_0, v1.2.0, v1r2
-    pattern = re.compile(r'(v\d+[\._]\d+[\._]\d+|v\d+r\d+)', re.IGNORECASE)
+    pattern = re.compile(r'(v\d{1,10}(?:[\._]\d{1,10}[\._]\d{1,10}|r\d{1,10}))', re.IGNORECASE)
     for filepath in (pre_file, post_file):
         basename = Path(filepath).name
         match = pattern.search(basename)
@@ -106,9 +106,9 @@ def extract_results(audit_data):
         control_id = ''
         if title:
             # STIG format: XXXX-XX-XXXXXX (e.g., RHEL-09-123456, UBTU-22-654321)
-            stig_match = re.match(r'([A-Z]+-\d+-\d+)', title)
+            stig_match = re.match(r'([A-Z]+-\d{1,10}-\d{1,10})', title)
             # CIS format: digits separated by dots (e.g., 1.1.1.1, 5.2.3)
-            cis_match = re.match(r'(\d+(?:\.\d+)+)', title)
+            cis_match = re.match(r'(\d+(?:\.\d+){1,10})', title)
             if stig_match:
                 control_id = stig_match.group(1)
             elif cis_match:
