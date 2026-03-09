@@ -576,14 +576,17 @@ def extract_task_data(tasks_dir: str, benchmark_type: str,
                                     "file": rel,
                                 }
                     # Also check bare lines that are just the toggle (in when: lists)
-                    elif when_pat.fullmatch(stripped):
-                        current_key = stripped.replace(".", "_").strip("_")
-                        if current_key not in task_map:
-                            task_map[current_key] = {
-                                "rule_id": None,
-                                "cat": cat_num,
-                                "file": rel,
-                            }
+                    # Handles YAML list items ("- toggle") and compound
+                    # conditions ("- toggle_a or toggle_b")
+                    else:
+                        for m in when_pat.finditer(stripped):
+                            current_key = m.group(1).replace(".", "_").strip("_")
+                            if current_key not in task_map:
+                                task_map[current_key] = {
+                                    "rule_id": None,
+                                    "cat": cat_num,
+                                    "file": rel,
+                                }
 
                 # Detect Rule_ID from tags (works for both STIG and CIS)
                 if current_key and current_key in task_map:
