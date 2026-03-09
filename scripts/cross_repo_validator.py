@@ -2,8 +2,10 @@
 """Cross-Repo Validator for Ansible-Lockdown remediation + audit repo pairs.
 
 Validates consistency between a remediation role and its corresponding Goss
-audit repo across 14 checks.  Supports both STIG and CIS benchmark types,
-and works with public repos (no Private- prefix) or private repos.
+audit repo across 14 checks.  Reports include per-check criteria descriptions
+explaining what each check validates and why findings appear.
+Supports both STIG and CIS benchmark types, and works with public repos
+(no Private- prefix) or private repos.
 
   1. Rule Toggle Sync              - toggles match across defaults/template/audit vars/audit files
   2. Audit File Coverage           - every rule has an audit file and vice-versa
@@ -43,7 +45,7 @@ from typing import Dict, List, Optional, Set, Tuple, TypedDict
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 BENCHMARK_STIG = "stig"
 BENCHMARK_CIS = "cis"
@@ -199,11 +201,8 @@ def auto_detect_rule_id_prefix(audit_dir: str) -> str:
     For STIG repos: extracts e.g. 'AZLX-23' from 'AZLX-23-000100.yml'
     For CIS repos: returns '' (CIS uses section-based naming)
     """
-    for cat in ("cat_1", "cat_2", "cat_3"):
-        cat_path = os.path.join(audit_dir, cat)
-        if not os.path.isdir(cat_path):
-            continue
-        for _root, _dirs, files in os.walk(cat_path):
+    for subdir in _find_audit_subdirs(audit_dir):
+        for _root, _dirs, files in os.walk(subdir):
             for fname in sorted(files):
                 if not fname.endswith(".yml"):
                     continue
@@ -388,60 +387,104 @@ def extract_audit_files(audit_dir: str, benchmark_type: str,
                 rel = os.path.relpath(fpath, audit_dir)
                 stem = os.path.splitext(fname)[0]
 
-                # Determine cat from directory path
+                # Determine cat/section from directory path
                 dir_cat = None
-                cat_match = re.search(r"cat_(\d)", rel)
+                cat_match = re.search(r"(?:cat|section)_(\d+)", rel)
                 if cat_match:
                     dir_cat = int(cat_match.group(1))
 
-                rule_id = None
-                meta_id = None  # STIG_ID from metadata
                 meta_cat = None
-                toggle_from_conditional = None
+                all_toggles: List[str] = []
+                all_stig_ids: List[str] = []
+                all_rule_ids: List[str] = []
 
                 try:
                     with open(fpath, "r", encoding="utf-8") as fh:
                         for line in fh:
-                            if rule_id is None:
-                                m = rule_id_pat.search(line)
-                                if m:
-                                    rule_id = m.group(1)
-                            if meta_id is None:
-                                m = stig_id_pat.search(line)
-                                if m:
-                                    meta_id = m.group(1)
+                            m = rule_id_pat.search(line)
+                            if m:
+                                rid = m.group(1)
+                                if rid not in all_rule_ids:
+                                    all_rule_ids.append(rid)
+                            m = stig_id_pat.search(line)
+                            if m:
+                                sid = m.group(1)
+                                if sid not in all_stig_ids:
+                                    all_stig_ids.append(sid)
                             if meta_cat is None:
                                 m = cat_pat.search(line)
                                 if m:
                                     meta_cat = int(m.group(1))
-                            if toggle_from_conditional is None:
-                                m = cond_pat.search(line)
-                                if m:
-                                    toggle_from_conditional = m.group(1)
+                            # Collect ALL toggle conditionals (files
+                            # may contain multiple rules in one file)
+                            m = cond_pat.search(line)
+                            if m:
+                                toggle = m.group(1)
+                                if toggle not in all_toggles:
+                                    all_toggles.append(toggle)
                 except (IOError, OSError):
                     continue
 
-                # Determine the key for this audit file
-                if benchmark_type == BENCHMARK_STIG:
-                    # Use filename stem as key if it matches STIG_ID pattern
-                    if re.match(r"^[A-Z]+-\d+-\d{6}$", stem):
-                        key = stem
-                    else:
-                        # Non-standard name; skip or use conditional
-                        key = meta_id or stem
-                else:
-                    # CIS: key by the toggle variable from the conditional
-                    key = toggle_from_conditional or stem
+                toggle_from_conditional = all_toggles[0] if all_toggles else None
 
-                if key:
-                    audit_map[key] = {
-                        "file": rel,
-                        "cat": dir_cat,
-                        "meta_cat": meta_cat,
-                        "rule_id": rule_id,
-                        "meta_id": meta_id,
-                        "toggle": toggle_from_conditional,
-                    }
+                # Determine the key(s) for this audit file
+                if benchmark_type == BENCHMARK_STIG:
+                    if re.match(r"^[A-Z]+-\d+-\d{6}$", stem):
+                        # Standard single-rule file — register by filename
+                        audit_map[stem] = {
+                            "file": rel,
+                            "cat": dir_cat,
+                            "meta_cat": meta_cat,
+                            "rule_id": all_rule_ids[0] if all_rule_ids else None,
+                            "meta_id": all_stig_ids[0] if all_stig_ids else None,
+                            "toggle": toggle_from_conditional,
+                        }
+                    elif all_stig_ids:
+                        # Non-standard name with metadata — register each
+                        # STIG_ID found (handles multi-rule files)
+                        for i, sid in enumerate(all_stig_ids):
+                            rid = all_rule_ids[i] if i < len(all_rule_ids) else None
+                            tog = all_toggles[i] if i < len(all_toggles) else None
+                            audit_map[sid] = {
+                                "file": rel,
+                                "cat": dir_cat,
+                                "meta_cat": meta_cat,
+                                "rule_id": rid,
+                                "meta_id": sid,
+                                "toggle": tog,
+                            }
+                    elif stem:
+                        # Fallback to filename stem
+                        audit_map[stem] = {
+                            "file": rel,
+                            "cat": dir_cat,
+                            "meta_cat": meta_cat,
+                            "rule_id": all_rule_ids[0] if all_rule_ids else None,
+                            "meta_id": None,
+                            "toggle": toggle_from_conditional,
+                        }
+                else:
+                    # CIS: register an entry for EACH toggle in the file
+                    if all_toggles:
+                        for toggle in all_toggles:
+                            audit_map[toggle] = {
+                                "file": rel,
+                                "cat": dir_cat,
+                                "meta_cat": meta_cat,
+                                "rule_id": all_rule_ids[0] if all_rule_ids else None,
+                                "meta_id": all_stig_ids[0] if all_stig_ids else None,
+                                "toggle": toggle,
+                            }
+                    else:
+                        # No conditional found; fall back to filename stem
+                        audit_map[stem] = {
+                            "file": rel,
+                            "cat": dir_cat,
+                            "meta_cat": meta_cat,
+                            "rule_id": all_rule_ids[0] if all_rule_ids else None,
+                            "meta_id": None,
+                            "toggle": None,
+                        }
 
     return audit_map
 
@@ -468,16 +511,26 @@ def extract_task_data(tasks_dir: str, benchmark_type: str,
         name_pat = None
 
     # CIS: extract toggle from when: conditions
+    # Include dots in char class — some repos use dotted notation
+    # (e.g. amazon2cis_rule_3.4.3.5) which we normalize to underscores
     if benchmark_type == BENCHMARK_CIS:
-        when_pat = re.compile(rf"({re.escape(prefix)}_rule_[\d_]+)")
+        when_pat = re.compile(rf"({re.escape(prefix)}_rule_[\d_.]+)")
     else:
         when_pat = None
 
-    for cat in ("cat_1", "cat_2", "cat_3"):
-        cat_path = os.path.join(tasks_dir, cat)
-        if not os.path.isdir(cat_path):
-            continue
-        cat_num = int(cat.split("_")[1])
+    # Discover task subdirectories dynamically (cat_* for STIG, section_* for CIS)
+    task_subdirs: List[str] = []
+    if os.path.isdir(tasks_dir):
+        for entry in sorted(os.listdir(tasks_dir)):
+            full = os.path.join(tasks_dir, entry)
+            if os.path.isdir(full) and (entry.startswith("cat_") or
+                                         entry.startswith("section_")):
+                task_subdirs.append(entry)
+
+    for subdir_name in task_subdirs:
+        cat_path = os.path.join(tasks_dir, subdir_name)
+        # Extract numeric portion: cat_1 -> 1, section_3 -> 3
+        cat_num = int(subdir_name.split("_", 1)[1]) if "_" in subdir_name else 0
 
         for fname in sorted(os.listdir(cat_path)):
             if not fname.endswith(".yml") or fname == "main.yml":
@@ -513,7 +566,9 @@ def extract_task_data(tasks_dir: str, benchmark_type: str,
                     if "when:" in stripped or stripped.startswith("- name:") or stripped.startswith("name:"):
                         m = when_pat.search(stripped)
                         if m:
-                            current_key = m.group(1)
+                            # Normalize dots to underscores (some repos
+                            # use e.g. amazon2cis_rule_3.4.3.5)
+                            current_key = m.group(1).replace(".", "_").strip("_")
                             if current_key not in task_map:
                                 task_map[current_key] = {
                                     "rule_id": None,
@@ -521,14 +576,17 @@ def extract_task_data(tasks_dir: str, benchmark_type: str,
                                     "file": rel,
                                 }
                     # Also check bare lines that are just the toggle (in when: lists)
-                    elif when_pat.fullmatch(stripped):
-                        current_key = stripped
-                        if current_key not in task_map:
-                            task_map[current_key] = {
-                                "rule_id": None,
-                                "cat": cat_num,
-                                "file": rel,
-                            }
+                    # Handles YAML list items ("- toggle") and compound
+                    # conditions ("- toggle_a or toggle_b")
+                    else:
+                        for m in when_pat.finditer(stripped):
+                            current_key = m.group(1).replace(".", "_").strip("_")
+                            if current_key not in task_map:
+                                task_map[current_key] = {
+                                    "rule_id": None,
+                                    "cat": cat_num,
+                                    "file": rel,
+                                }
 
                 # Detect Rule_ID from tags (works for both STIG and CIS)
                 if current_key and current_key in task_map:
@@ -734,6 +792,9 @@ def extract_template_variables(
                 if m:
                     var_name = m.group(1)
                     raw_val = m.group(2).strip()
+                    # Skip Jinja2 control blocks ({% if %}, {% for %}, etc.)
+                    if "{%" in raw_val:
+                        continue
                     is_hardcoded = "{{" not in raw_val
                     if is_hardcoded:
                         raw_val = _strip_yaml_value(raw_val)
@@ -1052,7 +1113,7 @@ def check_category_alignment(
     task_data: Dict[str, TaskInfo],
     audit_files: Dict[str, AuditInfo],
 ) -> CheckResult:
-    """Check 5: Rules live in matching cat_X dirs in both repos."""
+    """Check 5: Rules live in matching cat_X/section_X dirs in both repos."""
     findings: List[Finding] = []
     common = set(task_data.keys()) & set(audit_files.keys())
 
@@ -1198,7 +1259,13 @@ def check_goss_template_var_sync(
         if val in ("|", ">", "|-", ">-"):
             continue
 
-        # Check against defaults config vars
+        # Skip empty values (multiline structure parent keys like dicts/lists)
+        if not val or val == "":
+            continue
+
+        # Only flag mismatches against defaults — variables hardcoded in
+        # template but absent from defaults are intentional (audit-only
+        # structural vars like bootloader paths, sshd_limited, etc.)
         if var in defaults_config:
             def_val, _def_line = defaults_config[var]
             if def_val in ("|", ">", "|-", ">-"):
@@ -1214,17 +1281,6 @@ def check_goss_template_var_sync(
                     severity="warning",
                     check_name="goss_template_var_sync",
                 ))
-        elif var not in defaults_toggles:
-            # Variable hardcoded in template but not found in defaults at all
-            findings.append(Finding(
-                file="templates/ansible_vars_goss.yml.j2",
-                line=lineno,
-                description=(
-                    f"Hardcoded template variable '{var}' not found in defaults/main.yml"
-                ),
-                severity="info",
-                check_name="goss_template_var_sync",
-            ))
 
     status = _determine_status(findings, warn_on_any=True)
     return CheckResult("Template Variable Sync", status, findings,
@@ -1558,14 +1614,21 @@ def generate_markdown(metadata: ReportMetadata,
     lines.append(f"| Skipped | {skipped} |")
     lines.append("")
 
-    lines.append("| Check | Status | Findings |")
-    lines.append("|-------|--------|----------|")
+    lines.append("| Check | Description | Status | Findings |")
+    lines.append("|-------|-------------|--------|----------|")
     for r in results:
-        lines.append(f"| {r.name} | {r.status} | {r.summary} |")
+        desc = CHECK_DESCRIPTIONS.get(r.name, "")
+        lines.append(f"| {r.name} | {desc} | {r.status} | {r.summary} |")
     lines.append("")
 
     for r in results:
         lines.append(f"## [{r.status}] {r.name}\n")
+        desc = CHECK_DESCRIPTIONS.get(r.name, "")
+        if desc:
+            lines.append(f"*{desc}*\n")
+        criteria = CHECK_CRITERIA.get(r.name, "")
+        if criteria:
+            lines.append(f"> **Why these findings?** {criteria}\n")
         lines.append(f"**Status:** {r.status}  ")
         lines.append(f"**Summary:** {r.summary}\n")
 
@@ -1663,14 +1726,14 @@ def generate_html(metadata: ReportMetadata,
   .check-header:hover { background: var(--bg); }
   .check-title { font-weight: 600; font-size: 0.95rem; }
   .badge { display: inline-block; padding: 0.15em 0.55em; border-radius: 4px;
-           font-size: 0.75rem; font-weight: 700; color: #fff; }
-  .badge-pass { background: var(--pass); }
-  .badge-fail { background: var(--fail); }
-  .badge-warn { background: var(--warn); color: #212529; }
-  .badge-skip { background: var(--skip); }
-  .sev-error { color: var(--fail); font-weight: 600; }
-  .sev-warning { color: #b8860b; font-weight: 600; }
-  .sev-info { color: #0c7c84; font-weight: 600; }
+           font-size: 0.75rem; font-weight: 700; }
+  .badge-pass { background: #d4edda; color: #155724; }
+  .badge-fail { background: #f8d7da; color: #721c24; }
+  .badge-warn { background: #fff3cd; color: #856404; }
+  .badge-skip { background: #e2e3e5; color: #383d41; }
+  .sev-error { color: #721c24; font-weight: 600; }
+  .sev-warning { color: #856404; font-weight: 600; }
+  .sev-info { color: #0c5460; font-weight: 600; }
   .check-body { padding: 0 1rem 1rem; }
   .check-body table { margin-top: 0.5rem; }
   .file-col { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
@@ -1682,6 +1745,10 @@ def generate_html(metadata: ReportMetadata,
                      overflow: hidden; margin-bottom: 1.5rem; }
   .truncated { font-style: italic; color: var(--text-light); padding: 0.5rem 0.75rem; }
   footer { margin-top: 2rem; text-align: center; font-size: 0.8rem; color: var(--text-light); }
+  @media print { body { background: #fff; padding: 10px; }
+    .check-section { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
+    .check-section.collapsed .check-body { display: block; }
+    .check-section.collapsed .toggle-arrow { transform: none; } }
 </style>
 </head>
 <body>
@@ -1723,11 +1790,13 @@ def generate_html(metadata: ReportMetadata,
 
     # Overview table
     parts.append("<div class='overview-table'><table>")
-    parts.append("<tr><th>Check</th><th>Status</th><th>Findings</th></tr>")
+    parts.append("<tr><th>Check</th><th>Description</th><th>Status</th><th>Findings</th></tr>")
     for r in results:
         badge_cls = f"badge-{r.status.lower()}"
+        desc = CHECK_DESCRIPTIONS.get(r.name, "")
         parts.append(
             f"<tr><td>{h(r.name)}</td>"
+            f"<td style='font-size:0.85rem;color:var(--text-light)'>{h(desc)}</td>"
             f"<td><span class='badge {badge_cls}'>{r.status}</span></td>"
             f"<td>{h(r.summary)}</td></tr>"
         )
@@ -1738,13 +1807,27 @@ def generate_html(metadata: ReportMetadata,
         badge_cls = f"badge-{r.status.lower()}"
         collapsed = " collapsed" if r.status == "PASS" and not r.findings else ""
         parts.append(f"<div class='check-section{collapsed}'>")
+        desc = CHECK_DESCRIPTIONS.get(r.name, "")
+        desc_html = (
+            f"<div style='font-size:0.85rem;color:var(--text-light);"
+            f"font-style:italic;margin-top:0.15rem'>{h(desc)}</div>"
+        ) if desc else ""
         parts.append(
             f"<div class='check-header' onclick='this.parentElement.classList.toggle(\"collapsed\")'>"
-            f"<span class='check-title'>{h(r.name)}</span>"
+            f"<span><span class='check-title'>{h(r.name)}</span>"
+            f"{desc_html}</span>"
             f"<span><span class='badge {badge_cls}'>{r.status}</span> "
             f"<span class='toggle-arrow'>&#9660;</span></span></div>"
         )
         parts.append("<div class='check-body'>")
+        criteria = CHECK_CRITERIA.get(r.name, "")
+        if criteria:
+            parts.append(
+                f"<p style='background:#f0f4f8;border-left:3px solid #4a90d9;"
+                f"padding:0.6rem 0.8rem;margin:0 0 0.75rem;font-size:0.85rem;"
+                f"color:#3a4a5a;border-radius:0 4px 4px 0;line-height:1.5'>"
+                f"<b>Why these findings?</b> {h(criteria)}</p>"
+            )
         if r.findings:
             parts.append("<table><tr><th>Severity</th><th>File</th>"
                          "<th>Line</th><th>Description</th></tr>")
@@ -1787,7 +1870,9 @@ def generate_json(metadata: ReportMetadata,
         "checks": [
             {
                 "name": r.name,
+                "description": CHECK_DESCRIPTIONS.get(r.name, ""),
                 "status": r.status,
+                "criteria": CHECK_CRITERIA.get(r.name, ""),
                 "summary": r.summary,
                 "findings": [asdict(f) for f in r.findings],
             }
@@ -1826,6 +1911,173 @@ CHECK_NAMES = {
     "severity_directory": "Severity-Directory Alignment",
     "goss_block_pairing": "Goss Block Pairing",
     "when_toggle_alignment": "When-Toggle Alignment",
+}
+
+# Short one-line descriptions displayed as subtitles under each section heading
+# in Markdown and HTML reports.
+CHECK_DESCRIPTIONS: Dict[str, str] = {
+    "Rule Toggle Sync": (
+        "Are rule toggle variables consistently defined across "
+        "defaults, goss template, audit vars, and audit test conditionals?"
+    ),
+    "Audit File Coverage": (
+        "Does every rule toggle have an audit test file, "
+        "and does every audit file map to a defined rule?"
+    ),
+    "Rule_ID Consistency": (
+        "Do SV-* Rule_ID values in remediation task tags match "
+        "the Rule_ID metadata in the corresponding audit files?"
+    ),
+    "Rule Key Consistency": (
+        "Do rule identifiers agree across task names, "
+        "audit filenames, and audit metadata?"
+    ),
+    "Category Alignment": (
+        "Is each rule in the same category/section directory "
+        "in both the remediation and audit repos?"
+    ),
+    "Version Consistency": (
+        "Does the benchmark version match across defaults/main.yml, "
+        "audit vars, and run_audit.sh?"
+    ),
+    "Goss Include Coverage": (
+        "Is every audit test file reachable by at least one "
+        "glob pattern in goss.yml?"
+    ),
+    "Config Variable Parity": (
+        "Do non-toggle configuration variables (paths, ciphers, policies) "
+        "have the same values in defaults and audit vars?"
+    ),
+    "Template Variable Sync": (
+        "Do hardcoded values in the goss Jinja2 template match "
+        "the corresponding values in defaults/main.yml?"
+    ),
+    "Audit Vars Completeness": (
+        "Are all .Vars references used in goss test files "
+        "defined in the audit vars file?"
+    ),
+    "Toggle Value Sync": (
+        "Do rule toggle boolean values (true/false) match "
+        "between defaults/main.yml and the audit vars file?"
+    ),
+    "Severity-Directory Alignment": (
+        "Does the severity label in each STIG task name (HIGH/MEDIUM/LOW) "
+        "match the cat_X directory it lives in?"
+    ),
+    "Goss Block Pairing": (
+        "Are Go template if/range/end blocks properly balanced "
+        "in every audit test file?"
+    ),
+    "When-Toggle Alignment": (
+        "Does each STIG task's when: condition reference the "
+        "correct toggle variable for its STIG_ID?"
+    ),
+}
+
+# Criteria descriptions explain what each check validates and why findings
+# appear under that heading.  Used by all three report generators.
+CHECK_CRITERIA: Dict[str, str] = {
+    "Rule Toggle Sync": (
+        "Verifies that every rule toggle variable (e.g. amazon2cis_rule_1_1_1_1) "
+        "is consistently defined across all four locations: defaults/main.yml, the "
+        "Jinja2 goss template (templates/ansible_vars_goss.yml.j2), the audit vars "
+        "file (vars/CIS.yml or vars/STIG.yml), and the audit test file conditionals "
+        "({{ if .Vars.<toggle> }}). Findings appear here when a toggle exists in one "
+        "location but is missing from another, which can cause remediation to run "
+        "without a corresponding audit test, or vice-versa."
+    ),
+    "Audit File Coverage": (
+        "Checks that every rule toggle defined in defaults/main.yml has a "
+        "corresponding audit test file, and that every audit test file maps back to "
+        "a known rule toggle. Findings appear here when a rule has no audit file "
+        "(meaning remediation runs but is never validated) or when an orphaned audit "
+        "file exists with no matching rule toggle (dead test that will never execute)."
+    ),
+    "Rule_ID Consistency": (
+        "Compares the SV-* Rule_ID values between remediation task tags and audit "
+        "file metadata comments. Findings appear here when the Rule_ID in a task "
+        "file does not match the Rule_ID declared in the corresponding audit file, "
+        "or when one side is missing a Rule_ID entirely. Mismatched Rule_IDs can "
+        "cause traceability issues back to the original STIG/CIS benchmark item."
+    ),
+    "Rule Key Consistency": (
+        "Validates that rule identifiers agree across task names and audit filenames/"
+        "metadata. For STIG, this checks that audit filename STIG_IDs match their "
+        "internal STIG_ID metadata. For both types, it flags rules that appear only "
+        "in tasks (no audit test) or only in audit (no remediation task). Findings "
+        "here are informational and typically indicate multi-rule audit files or "
+        "tasks that group sub-rules differently than the audit side."
+    ),
+    "Category Alignment": (
+        "Ensures that each rule lives in the same category/section directory in both "
+        "the remediation repo (tasks/section_X/ or tasks/cat_X/) and the audit repo "
+        "(section_X/ or cat_X/). Findings appear here when a rule is in section_3/ "
+        "on the task side but section_4/ on the audit side, for example. Misaligned "
+        "categories indicate the rule was moved or miscategorized in one repo."
+    ),
+    "Version Consistency": (
+        "Compares the benchmark version string across defaults/main.yml, the audit "
+        "vars file, and run_audit.sh (BENCHMARK_VER). Findings appear here when the "
+        "major.minor version differs between any of these locations, which means the "
+        "repos are targeting different benchmark releases and may have incompatible "
+        "rule sets."
+    ),
+    "Goss Include Coverage": (
+        "Verifies that every audit test file (*.yml under section_*/cat_*) is "
+        "reachable by at least one glob pattern in goss.yml. Findings appear here "
+        "when an audit file exists on disk but goss.yml has no matching include "
+        "pattern, meaning the test will never be executed during an audit run."
+    ),
+    "Config Variable Parity": (
+        "Compares non-toggle configuration variables (e.g. syslog paths, cipher "
+        "lists, password policies) that share the benchmark prefix between "
+        "defaults/main.yml and the audit vars file. Findings appear here when the "
+        "same variable has different values in each file, which can cause the audit "
+        "to validate against different expected values than what remediation applies."
+    ),
+    "Template Variable Sync": (
+        "Scans the Jinja2 goss template (ansible_vars_goss.yml.j2) for variables "
+        "that use hardcoded literal values instead of {{ var }} templating, then "
+        "compares those values against defaults/main.yml. Findings appear here when "
+        "a template has a hardcoded value that differs from the default, meaning "
+        "the audit will always test against the template value regardless of what "
+        "the user configures in defaults."
+    ),
+    "Audit Vars Completeness": (
+        "Scans all goss audit test files for .Vars.<name> references and checks "
+        "that each referenced variable (excluding rule toggles and known runtime "
+        "vars) is defined in the audit vars file. Findings appear here when a goss "
+        "test references a variable that has no definition, which will cause the "
+        "test to use a zero/empty value at runtime and likely produce false results."
+    ),
+    "Toggle Value Sync": (
+        "Compares the boolean value (true/false) of each rule toggle between "
+        "defaults/main.yml and the audit vars file. Findings appear here when a "
+        "toggle is 'true' in defaults but 'false' in audit vars (or vice-versa), "
+        "meaning remediation will run/skip a rule but the audit will do the "
+        "opposite — leading to false positives or missed validations."
+    ),
+    "Severity-Directory Alignment": (
+        "STIG only. Checks that the severity label in each task name (HIGH, MEDIUM, "
+        "LOW) matches the cat_X directory the task file lives in (cat_1=HIGH, "
+        "cat_2=MEDIUM, cat_3=LOW). Findings appear here when a task labelled HIGH "
+        "is in cat_2/, for example, indicating the task was placed in the wrong "
+        "severity directory or the name label is incorrect. Skipped for CIS."
+    ),
+    "Goss Block Pairing": (
+        "Validates that Go template control blocks in audit files are balanced — "
+        "every {{ if }} and {{ range }} must have a matching {{ end }}. Findings "
+        "appear here when a file has mismatched opening/closing blocks, which will "
+        "cause goss template rendering to fail at audit runtime."
+    ),
+    "When-Toggle Alignment": (
+        "STIG only. Verifies that each task's when: condition references the "
+        "correct toggle variable for its STIG_ID. For example, a task named "
+        "AZLX-23-000100 should use when: az2023stig_000100. Findings appear here "
+        "when the when: toggle does not match the STIG_ID in the task name, which "
+        "means enabling/disabling one rule accidentally controls a different rule. "
+        "Skipped for CIS."
+    ),
 }
 
 

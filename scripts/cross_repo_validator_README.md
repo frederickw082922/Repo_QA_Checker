@@ -2,7 +2,7 @@
 
 Validates consistency between an Ansible-Lockdown **remediation role** and its paired **Goss audit repo** — supports both **STIG** and **CIS** benchmarks, with or without a `Private-` prefix.
 
-**Version:** 2.5.0
+**Version:** 2.6.0
 
 ---
 
@@ -258,6 +258,8 @@ Three-way validation:
 2. Rule keys present in tasks but missing from audit (informational).
 3. Rule keys present in audit but missing from tasks (informational).
 
+**Note:** Audit files may contain multiple rules in a single file (e.g., CIS `cis_3.5.3.3.x.yml` with 6 rules, or STIG files with multiple STIG_IDs). All toggle conditionals, STIG_IDs, and Rule_IDs within each file are extracted and registered individually.
+
 **Severity:** error (filename/metadata mismatch), info (coverage gaps)
 
 ---
@@ -316,9 +318,11 @@ Only simple scalar values are compared; multi-line blocks and list values are sk
 
 **Key:** `goss_template_var_sync`
 
-Scans `templates/ansible_vars_goss.yml.j2` for variables that use **hardcoded literal values** instead of Jinja2 templating (`{{ }}`). When a hardcoded value is found, verifies it matches `defaults/main.yml`. Catches cases where a developer hardcoded a value in the template that has since changed in defaults.
+Scans `templates/ansible_vars_goss.yml.j2` for variables that use **hardcoded literal values** instead of Jinja2 templating (`{{ }}`). When a hardcoded value is found and the same variable exists in `defaults/main.yml`, verifies the values match. Catches cases where a developer hardcoded a value in the template that has since changed in defaults.
 
-**Severity:** warning (mismatch), info (hardcoded but not in defaults)
+Skips Jinja2 control blocks (`{% if %}`, `{% for %}`), empty/bare parent keys for multiline structures, and variables that are intentionally hardcoded in the template but absent from defaults (audit-only structural vars like bootloader paths).
+
+**Severity:** warning (mismatch)
 
 ---
 
@@ -441,6 +445,8 @@ Generates a Markdown report with:
 - Header metadata (repos, date, detected prefixes, benchmark type, benchmark version, git branches)
 - Summary table (total/passed/failed/warnings/skipped)
 - Per-check status table
+- Per-check **description subtitle** summarizing what the check asks (italic one-liner)
+- Per-check **"Why these findings?"** criteria block explaining the check logic in detail
 - Per-check findings tables (up to 200 findings per check)
 
 ### HTML
@@ -455,8 +461,13 @@ Self-contained HTML report with embedded CSS. Features:
 - Summary cards with colour-coded counts (pass/fail/warn/skip)
 - Overview table with status badges
 - Collapsible per-check detail sections (PASS checks start collapsed)
+- Per-check **description subtitle** in each collapsible header
+- Per-check **"Why these findings?"** criteria callout (styled box explaining the check logic)
 - Colour-coded severity labels (error=red, warning=amber, info=teal)
+- Pastel status badges consistent with the QA tool and Audit Compare
 - Monospace file paths, sticky table headers, responsive layout
+- **Print-friendly** `@media print` styles (expands collapsed sections, removes shadows)
+- Generation footer with tool version and date
 - No external dependencies — opens in any browser
 
 ### JSON
@@ -466,7 +477,7 @@ python3 cross_repo_validator.py -r repo --format json
 # Creates: cross_repo_report.json
 ```
 
-Structured JSON with metadata, summary counts, and per-check findings arrays. Suitable for programmatic consumption and CI pipelines.
+Structured JSON with metadata, summary counts, and per-check findings arrays. Each check object includes a `"description"` (short one-liner) and `"criteria"` (detailed explanation) field. Suitable for programmatic consumption and CI pipelines.
 
 ### Custom Output Path
 
@@ -507,7 +518,7 @@ Detected from `defaults/main.yml` by voting on underscore-delimited variable nam
 
 ### 3. Rule ID Prefix (STIG only)
 
-Detected from the first audit file name found under `cat_*/`:
+Detected from the first audit file name found under `cat_*/` or `section_*/`:
 
 | Audit File | Detected Prefix |
 |-----------|----------------|
@@ -651,6 +662,15 @@ python3 scripts/cross_repo_validator.py \
 ```
 ## [WARN] Rule Toggle Sync
 
+*Are rule toggle variables consistently defined across defaults, goss
+template, audit vars, and audit test conditionals?*
+
+> **Why these findings?** Verifies that every rule toggle variable is
+> consistently defined across all four locations: defaults/main.yml, the
+> Jinja2 goss template, the audit vars file, and the audit test file
+> conditionals. Findings appear here when a toggle exists in one location
+> but is missing from another.
+
 | Severity | File | Line | Description |
 |----------|------|------|-------------|
 | warning | `vars/STIG.yml` | - | In defaults but missing from vars/STIG.yml: 'az2023stig_001295' |
@@ -658,17 +678,26 @@ python3 scripts/cross_repo_validator.py \
 
 ## [FAIL] Rule_ID Consistency
 
+*Do SV-* Rule_ID values in remediation task tags match the Rule_ID
+metadata in the corresponding audit files?*
+
+> **Why these findings?** Compares the SV-* Rule_ID values between
+> remediation task tags and audit file metadata comments. Findings appear
+> here when the Rule_ID in a task file does not match the corresponding
+> audit file.
+
 | Severity | File | Line | Description |
 |----------|------|------|-------------|
 | error | `cat_2/AZLX-23-000xxx/AZLX-23-000135.yml` | - | Rule_ID mismatch for AZLX-23-000135: task='SV-273996r1119976_rule' vs audit='SV-274000r1119991_rule' |
 
-## [FAIL] Rule Key Consistency
-
-| Severity | File | Line | Description |
-|----------|------|------|-------------|
-| error | `cat_2/AZLX-23-002xxx/AZLX-23-002450.yml` | - | Audit filename/metadata STIG_ID mismatch: file='AZLX-23-002450' vs metadata='AZLX-23-002445' |
-
 ## [WARN] Config Variable Parity
+
+*Do non-toggle configuration variables (paths, ciphers, policies) have
+the same values in defaults and audit vars?*
+
+> **Why these findings?** Compares non-toggle configuration variables
+> between defaults/main.yml and the audit vars file. Findings appear here
+> when the same variable has different values in each file.
 
 | Severity | File | Line | Description |
 |----------|------|------|-------------|
@@ -689,19 +718,17 @@ python3 scripts/cross_repo_validator.py \
   defaults/main.yml ----+              +-- vars/STIG.yml or CIS.yml
     (rule toggles)      |              |     (rule toggles)
                         |              |
-  templates/            |  cross_repo  |   cat_1/*.yml  (STIG)
-    ansible_vars_       +--validator---+   cat_2/**/*.yml
-    goss.yml.j2         |  14 checks |   cat_3/**/*.yml
-    (rule toggles)      |              |   section_*/*.yml (CIS)
-                        |              |     (conditionals,
-  tasks/cat_{1,2,3}/  --+              +--    Rule_IDs,
-    (rule keys,                        |      rule keys,
-     Rule_IDs,                         |      categories)
-     categories)                       |
-                                       +-- goss.yml
-                                       |     (include globs)
-                                       |
-                                       +-- run_audit.sh
+  templates/            |  cross_repo  |   cat_*/*.yml    (STIG)
+    ansible_vars_       +--validator---+   section_*/*.yml (CIS)
+    goss.yml.j2         |  14 checks  |     (conditionals,
+    (rule toggles)      |              |      Rule_IDs,
+                        |              +--    rule keys,
+  tasks/              --+              |      categories)
+    cat_*/ (STIG)       |              |
+    section_*/ (CIS)    |              +-- goss.yml
+    (rule keys,                        |     (include globs)
+     Rule_IDs,                         |
+     categories)                       +-- run_audit.sh
                                              (version)
 ```
 
@@ -713,7 +740,7 @@ Before extraction, the tool detects:
 |------|-----|
 | Benchmark type | Count `_rule_` vs 6-digit patterns in `defaults/main.yml` |
 | Benchmark prefix | Counter-voting on underscore-delimited variable segments |
-| Rule ID prefix | First STIG-pattern filename in `cat_*/` (empty for CIS) |
+| Rule ID prefix | First STIG-pattern filename in `cat_*/` or `section_*/` (empty for CIS) |
 | Audit vars file | Scan `vars/` for `STIG.yml`, `CIS.yml`, or any `.yml` |
 | Audit repo | Sibling directory search with `Private-` prefix stripping |
 
@@ -728,7 +755,7 @@ Before running checks, the tool extracts data from both repos into normalized di
 | `templates/ansible_vars_goss.yml.j2` | Toggle pattern + hardcoded vs templated config variables |
 | `vars/STIG.yml` or `vars/CIS.yml` | Toggle pattern + config variables + all defined variable names |
 | Audit `cat_*/**/*.yml` or `section_*/**/*.yml` | Goss conditionals, Rule_IDs, rule keys, categories, `.Vars.*` references |
-| Task `cat_*/*.yml` or `section_*/*.yml` | Rule keys from task names, Rule_IDs from tags, categories from directory |
+| Task `cat_*/*.yml` (STIG) or `section_*/*.yml` (CIS) | Rule keys from task names/when: conditions, Rule_IDs from tags, categories from directory |
 | `goss.yml` | Glob patterns for audit file inclusion |
 | 3 version locations | Raw version strings normalized to `(major, minor)` tuples |
 
@@ -738,7 +765,7 @@ Each check receives the pre-extracted data and produces a `CheckResult` containi
 
 ### Report Phase
 
-Results are formatted into Markdown or JSON. Findings are capped at 200 per check in Markdown to keep reports readable.
+Results are formatted into Markdown, HTML, or JSON. Each check section includes a **description subtitle** (short question summarizing the check) and a **"Why these findings?"** criteria block (detailed explanation of the check logic and what causes findings). Findings are capped at 200 per check in Markdown/HTML to keep reports readable.
 
 ---
 

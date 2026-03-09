@@ -35,5 +35,6 @@ htmlcov/
 .claude
 
 # Tool output
-qa_report.*
+*qa_report*
 baseline.json
+.DS_Store
