@@ -615,8 +615,9 @@ HTML_TEMPLATE = """\
   .summary-table td:first-child {{ font-weight: bold; }}
   /* --- Interactive toolbar --- */
   .toolbar {{ background: #fff; padding: 12px 15px; border-radius: 8px;
-              box-shadow: 0 2px 4px rgba(0,0,0,.1); margin-bottom: 20px;
-              display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }}
+              box-shadow: 0 2px 6px rgba(0,0,0,.15); margin-bottom: 20px;
+              display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+              position: sticky; top: 0; z-index: 100; }}
   .toolbar-group {{ display: flex; gap: 6px; align-items: center; }}
   .toolbar-label {{ font-weight: bold; font-size: .85em; margin-right: 2px; }}
   .filter-btn {{ padding: 4px 12px; border-radius: 12px; font-size: .85em;
@@ -1248,6 +1249,16 @@ function runCompare() {
         if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'Server error'); });
         return r.text();
     }).then(function(html) {
+        // Inject the report style block so toolbar/badge/section CSS applies
+        var styleMatch = html.match(/<style>([\\s\\S]*?)<\\/style>/i);
+        var oldStyle = document.getElementById('reportStyle');
+        if (oldStyle) oldStyle.remove();
+        if (styleMatch) {
+            var s = document.createElement('style');
+            s.id = 'reportStyle';
+            s.textContent = styleMatch[1];
+            document.head.appendChild(s);
+        }
         // Extract the body content from the full HTML report
         var match = html.match(/<body[^>]*>([\\s\\S]*)<\\/body>/i);
         var content = match ? match[1] : html;
