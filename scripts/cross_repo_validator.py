@@ -45,7 +45,7 @@ from typing import Dict, List, Optional, Set, Tuple, TypedDict
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 BENCHMARK_STIG = "stig"
 BENCHMARK_CIS = "cis"

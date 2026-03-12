@@ -4,6 +4,25 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.7.0 - 2026-03-12
+
+### Added
+
+- **FIX Scripts:** Added suite of standalone fix scripts for common QA findings — `fix_changed_when.py`, `fix_company_naming.py`, `fix_file_modes.py`, `fix_fqcn.py`, `fix_handler_refs.py`, `fix_ignore_errors.py`, `fix_loop_control.py`, `fix_no_log.py`, `fix_spelling.py`, `fix_when_inline.py`, `check_rule_coverage.py`, `check_tags_completeness.py`, `check_var_naming.py` — with dedicated FIX Scripts README
+
+### Changed
+
+- **Report consistency across tools:** Standardized report formatting and descriptions across QA Repo Check, Cross-Repo Validator, and Audit Compare for consistent look and feel
+
+### Fixed
+
+- **Audit Compare: Web UI filter issue:** Fixed filtering functionality in the Audit Compare HTML report web interface
+- **Audit Compare: CodeQL polynomial regex fix:** Refactored regular expressions to eliminate polynomial backtracking flagged by CodeQL security scanning
+- **Audit Compare: Bounded regex quantifiers:** Bounded all `\d+` to `\d{1,10}` and changed `([a-zA-Z]+)` to `([a-zA-Z]+?)` across every regex to prevent catastrophic backtracking
+- **Cross-Repo Validator: Rule Key Consistency false positives for CIS bare `when:` list items:** Fixed `extract_task_data()` to correctly detect bare toggle lines in Ansible `when:` lists for CIS repos, eliminating false "Rule found in audit but no task" info findings
+
+---
+
 ## 2.6.0 - 2026-03-06
 
 ### Added
