@@ -21,11 +21,10 @@ Standalone Python scripts for detecting and auto-fixing common issues in [Ansibl
 | [`check_var_naming.py`](#check_var_namingpy) | Register prefixes, duplicates, fwd/reverse | Report only |
 | [`fix_ignore_errors.py`](#fix_ignore_errorspy) | `ignore_errors: true` → `failed_when: false` | `--fix` |
 | [`fix_loop_control.py`](#fix_loop_controlpy) | Loops missing `loop_control.label` | `--fix` |
-| [`check_rule_coverage.py`](#check_rule_coveragepy) | Rule toggle ↔ task coverage gaps | Report only |
-| [`check_var_naming.py`](#check_var_namingpy) | Register prefixes, duplicates, fwd/reverse | Report only |
 | [`check_tags_completeness.py`](#check_tags_completenesspy) | Tasks missing required tags (rule ID, level) | Report only |
 | [`check_audit_keys.py`](#check_audit_keyspy) | Duplicate keys in Goss audit templates | Report only |
 | [`check_template_headers.py`](#check_template_headerspy) | Missing `{{ file_managed_by_ansible }}` header | `--fix` |
+| [`check_register_order.py`](#check_register_orderpy) | `register:` before `changed_when`/`failed_when`/`check_mode` | `--fix` |
 
 ---
 
@@ -459,6 +458,29 @@ python check_template_headers.py /path/to/role --exclude custom.j2
 - Audit YAML templates: `*goss*.yml.j2`, `*audit*.yml.j2` (require `---` on line 1)
 - `sshd_config.j2` (system config file)
 
+### `check_register_order.py`
+
+Verifies that `register:` appears after all evaluation/safety attributes (`changed_when:`, `failed_when:`, `check_mode:`, `no_log:`) in every task. The Lockdown convention places `register:` as the last logical attribute on a task.
+
+```bash
+python check_register_order.py /path/to/role              # Scan only
+python check_register_order.py /path/to/role --fix         # Auto-fix ordering
+python check_register_order.py /path/to/role --summary     # One-line summary
+```
+
+**What it fixes:**
+```yaml
+# Before                          # After
+- name: Check status              - name: Check status
+  ansible.builtin.shell: cmd        ansible.builtin.shell: cmd
+  register: result                   changed_when: false
+  changed_when: false                failed_when: false
+  failed_when: false                 check_mode: false
+  check_mode: false                  register: result
+```
+
+**Scans:** `tasks/` and `handlers/`. Detects `register:` followed by any of `changed_when:`, `failed_when:`, `check_mode:`, or `no_log:` at the same indentation level.
+
 ---
 
 ## Recommended Workflow
@@ -480,6 +502,7 @@ python scripts/check_var_naming.py .
 python scripts/check_tags_completeness.py .
 python scripts/check_audit_keys.py .
 python scripts/check_template_headers.py .
+python scripts/check_register_order.py .
 ```
 
 ### Auto-Fix (safe order)
@@ -510,7 +533,10 @@ python scripts/fix_company_naming.py . --fix --new-name "YourCompany"
 # 5. Template fixes
 python scripts/check_template_headers.py . --fix
 
-# 6. Review all changes
+# 6. Register ordering
+python scripts/check_register_order.py . --fix
+
+# 7. Review all changes
 git diff
 ```
 
