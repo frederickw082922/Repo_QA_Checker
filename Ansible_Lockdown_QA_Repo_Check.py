@@ -790,6 +790,8 @@ class GrammarCheck:
 
     _MD_SKIP_PATTERNS = {"Multiple consecutive spaces"}
     _COMMENT_SKIP_PATTERNS = {"Multiple consecutive spaces"}
+    # Skip "Multiple consecutive spaces" in task names: Jinja2 stripping often leaves "  " (e.g. "for {{ x }} |" -> "for  |")
+    _TASK_NAME_SKIP_PATTERNS = {"Multiple consecutive spaces"}
 
     def __init__(self, scanner: RepoScanner):
         self.scanner = scanner
@@ -827,6 +829,9 @@ class GrammarCheck:
                         if source == "comment" and desc_tmpl in self._COMMENT_SKIP_PATTERNS:
                             continue
                         if is_aide and desc_tmpl in self._COMMENT_SKIP_PATTERNS:
+                            continue
+                        # Skip in task names (Jinja2 stripping leaves false "  " e.g. "for {{ x }} |" -> "for  |")
+                        if source == "task_name" and desc_tmpl in self._TASK_NAME_SKIP_PATTERNS:
                             continue
                         m = pat.search(text)
                         if m:

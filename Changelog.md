@@ -16,6 +16,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ### Fixed
 
+- **Grammar Check: "Multiple consecutive spaces" false positives in task names:** Task names containing Jinja2 expressions (e.g. `"Check for {{ ansible_env.SUDO_USER }} | state"`) are stripped of `{{ ... }}` before grammar analysis. That often leaves two consecutive spaces (e.g. `for  |`), which was incorrectly reported as "Multiple consecutive spaces." The Grammar check now skips the "Multiple consecutive spaces" rule when the text is a task name, so these Jinja2-stripping artifacts are no longer flagged. Comments and Markdown continue to skip this rule as before.
 - **Audit Compare: Web UI filter issue:** Fixed filtering functionality in the Audit Compare HTML report web interface
 - **Audit Compare: CodeQL polynomial regex fix:** Refactored regular expressions to eliminate polynomial backtracking flagged by CodeQL security scanning
 - **Audit Compare: Bounded regex quantifiers:** Bounded all `\d+` to `\d{1,10}` and changed `([a-zA-Z]+)` to `([a-zA-Z]+?)` across every regex to prevent catastrophic backtracking
