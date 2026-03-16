@@ -792,6 +792,8 @@ class GrammarCheck:
     _COMMENT_SKIP_PATTERNS = {"Multiple consecutive spaces"}
     # Skip "Multiple consecutive spaces" in task names: Jinja2 stripping often leaves "  " (e.g. "for {{ x }} |" -> "for  |")
     _TASK_NAME_SKIP_PATTERNS = {"Multiple consecutive spaces"}
+    # Markdown files to skip entirely (e.g. changelogs with intentional formatting)
+    _SKIP_MD_BASENAMES = {"Changelog.md", "CHANGELOG.md"}
 
     def __init__(self, scanner: RepoScanner):
         self.scanner = scanner
@@ -804,7 +806,12 @@ class GrammarCheck:
             ext = os.path.splitext(fp)[1]
             rel = _relpath(fp, self.scanner.directory)
             is_md = ext == ".md"
-            if os.path.basename(fp) == "aide.conf.j2":
+            basename = os.path.basename(fp)
+            if is_md and basename in self._SKIP_MD_BASENAMES:
+                continue
+            if is_md and basename.startswith("qa_report") and basename.endswith(".md"):
+                continue
+            if basename == "aide.conf.j2":
                 continue
             for num, raw_line in enumerate(self.scanner.read_lines(fp), 1):
                 # Check both comments and task name: values
