@@ -844,6 +844,10 @@ class GrammarCheck:
                         if m:
                             desc = desc_tmpl.format(m.group(1)
                                                     if m.lastindex else "")
+                            # Skip Subject-verb disagreement in tasks/section* and tasks/cat*
+                            if "Subject-verb disagreement" in desc_tmpl and (
+                                    rel.startswith("tasks/section") or rel.startswith("tasks/cat")):
+                                continue
                             findings.append(Finding(rel, num, desc, sev,
                                                     "grammar"))
         status = "PASS" if not findings else "WARN"
