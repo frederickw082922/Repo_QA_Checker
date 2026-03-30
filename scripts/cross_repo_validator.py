@@ -2,7 +2,7 @@
 """Cross-Repo Validator for Ansible-Lockdown remediation + audit repo pairs.
 
 Validates consistency between a remediation role and its corresponding Goss
-audit repo across 14 checks.  Reports include per-check criteria descriptions
+audit repo across 15 checks.  Reports include per-check criteria descriptions
 explaining what each check validates and why findings appear.
 Supports both STIG and CIS benchmark types, and works with public repos
 (no Private- prefix) or private repos.
@@ -21,6 +21,7 @@ Supports both STIG and CIS benchmark types, and works with public repos
  12. Severity-Directory Alignment  - task severity labels match cat_X directories (STIG)
  13. Goss Block Pairing            - if/range/end blocks are balanced in audit files
  14. When-Toggle Alignment         - task when: conditions reference correct toggle (STIG)
+ 15. Template-Goss Var Cross-Ref   - goss .Vars references match template output keys and defaults
 
 Zero external dependencies — uses Python 3 standard library only.
 """
@@ -804,6 +805,47 @@ def extract_template_variables(
     return variables
 
 
+def extract_template_output_keys(template_path: str) -> Dict[str, int]:
+    """Extract ALL top-level YAML keys the Jinja2 template will output.
+
+    Returns {key_name: first_line_number}.
+    Handles Jinja2 if/else blocks: keys inside {% if %}/{% else %} are
+    conditional and only one branch renders, so they are NOT duplicates.
+    """
+    keys: Dict[str, int] = {}
+    try:
+        with open(template_path, "r", encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, 1):
+                s = line.strip()
+                if not s or s.startswith("{%") or s.startswith("#"):
+                    continue
+                m = re.match(r"^([a-zA-Z_]\w*)\s*:", s)
+                if m:
+                    key = m.group(1)
+                    if key not in keys:
+                        keys[key] = lineno
+    except FileNotFoundError:
+        pass
+    return keys
+
+
+def extract_defaults_all_keys(defaults_path: str) -> Set[str]:
+    """Extract ALL top-level YAML keys from defaults/main.yml."""
+    keys: Set[str] = set()
+    try:
+        with open(defaults_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                s = line.rstrip()
+                if not s or s.startswith("#") or s[0] in (" ", "\t"):
+                    continue
+                m = re.match(r"^([a-zA-Z_]\w*)\s*:", s)
+                if m and m.group(1) != "---":
+                    keys.add(m.group(1))
+    except FileNotFoundError:
+        pass
+    return keys
+
+
 def extract_goss_var_references(audit_dir: str) -> Dict[str, Set[str]]:
     """Extract all .Vars.xxx references from goss audit test files.
 
@@ -1562,6 +1604,172 @@ def check_when_toggle_alignment(
                        f"{len(findings)} issue(s)")
 
 
+def check_template_goss_var_crossref(
+    goss_var_refs: Dict[str, Set[str]],
+    template_output_keys: Dict[str, int],
+    defaults_all_keys: Set[str],
+    audit_vars_defined: Set[str],
+    prefix: str,
+    benchmark_type: str,
+    template_path: str,
+    defaults_path: str,
+) -> CheckResult:
+    """Check 15: Cross-ref goss .Vars references against template output keys.
+
+    Validates that:
+      A. Every goss .Vars.<name> reference is output by the template
+      B. Every template Jinja2 expression references a defined default/vars var
+      C. Naming mismatches (template outputs key X, goss expects similar key Y)
+    """
+    findings: List[Finding] = []
+
+    # Well-known runtime variables injected by run_audit.sh
+    runtime_vars = {
+        "machine_uuid", "epoch", "os_locale", "os_release",
+        "os_distribution", "auto_group", "os_hostname", "system_type",
+        "benchmark_type", "benchmark_version", "benchmark_os",
+        "system_is_container",
+    }
+
+    goss_non_runtime = {v for v in goss_var_refs if v not in runtime_vars}
+    tmpl_keys = set(template_output_keys.keys())
+
+    # A. Goss vars missing from template output
+    missing_from_tmpl = goss_non_runtime - tmpl_keys
+    for var in sorted(missing_from_tmpl):
+        # Skip non-prefixed vars (general goss/system vars) and toggles
+        if not var.startswith(prefix + "_"):
+            continue
+        if _is_toggle_var(var, prefix, benchmark_type):
+            continue
+        example_files = sorted(goss_var_refs[var])[:3]
+        file_list = ", ".join(example_files)
+        if len(goss_var_refs[var]) > 3:
+            file_list += f" (+{len(goss_var_refs[var]) - 3} more)"
+        findings.append(Finding(
+            file="templates/ansible_vars_goss.yml.j2",
+            line=0,
+            description=(
+                f"Goss tests reference '.Vars.{var}' but template "
+                f"does not output key '{var}'. Used in: {file_list}"
+            ),
+            severity="error",
+            check_name="template_goss_var_xref",
+        ))
+
+    # B. Template Jinja2 expressions referencing undefined vars
+    jinja_ref_pat = re.compile(r'\{\{\s*([a-zA-Z_]\w*?)(?:\s*[\.\[}|])')
+    # Load vars/audit.yml keys as additional valid sources
+    audit_yml_path = os.path.join(os.path.dirname(defaults_path),
+                                  "..", "vars", "audit.yml")
+    audit_local_keys: Set[str] = set()
+    norm_audit_yml = os.path.normpath(audit_yml_path)
+    if os.path.isfile(norm_audit_yml):
+        try:
+            with open(norm_audit_yml, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    m = re.match(r"^([a-zA-Z_]\w*)\s*:", line.rstrip())
+                    if m:
+                        audit_local_keys.add(m.group(1))
+        except (IOError, OSError):
+            pass
+
+    # Ansible builtins that are valid in templates
+    ansible_builtins = {
+        "item", "ansible_facts", "ansible_env", "ansible_check_mode",
+        "ansible_diff_mode", "ansible_version", "ansible_play_hosts",
+        "ansible_play_batch", "ansible_playbook_python", "ansible_connection",
+        "ansible_host", "ansible_port", "ansible_user", "ansible_forks",
+        "inventory_hostname", "inventory_hostname_short", "group_names",
+        "groups", "hostvars", "play_hosts", "role_path", "playbook_dir",
+        "omit", "true", "false", "none", "ansible_local",
+        "ansible_facts_path",
+    }
+    valid_sources = defaults_all_keys | audit_local_keys | ansible_builtins
+
+    # Extract Jinja2 loop variables and conditional-check variables
+    # ({% for X in ... %}, {% if X is defined %}) from the template
+    jinja2_loop_vars: Set[str] = set()
+    if os.path.isfile(template_path):
+        try:
+            with open(template_path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    # {% for var in ... %}
+                    fm = re.search(
+                        r'\{%[-\s]*for\s+(\w+)\s+in\b', line)
+                    if fm:
+                        jinja2_loop_vars.add(fm.group(1))
+                    # {% if var is defined %}
+                    cm = re.search(
+                        r'\{%[-\s]*if\s+(\w+)\s+is\s+defined', line)
+                    if cm:
+                        jinja2_loop_vars.add(cm.group(1))
+        except (IOError, OSError):
+            pass
+    valid_sources = valid_sources | jinja2_loop_vars
+
+    if os.path.isfile(template_path):
+        try:
+            with open(template_path, "r", encoding="utf-8") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    s = line.strip()
+                    if s.startswith("#") or s.startswith("{%"):
+                        continue
+                    for m in jinja_ref_pat.finditer(line):
+                        ref = m.group(1)
+                        if ref not in valid_sources:
+                            findings.append(Finding(
+                                file="templates/ansible_vars_goss.yml.j2",
+                                line=lineno,
+                                description=(
+                                    f"Template references '{{{{ {ref} }}}}' "
+                                    f"but '{ref}' not defined in "
+                                    f"defaults/main.yml or vars/audit.yml"
+                                ),
+                                severity="warning",
+                                check_name="template_goss_var_xref",
+                            ))
+        except (IOError, OSError):
+            pass
+
+    # C. Naming mismatches: template outputs X, goss expects similar Y
+    #    Exclude toggle vars (rule_X_Y_Z) — they share long prefixes by design
+    tmpl_only = tmpl_keys - goss_non_runtime - runtime_vars
+    goss_only = goss_non_runtime - tmpl_keys
+    # Filter to prefixed non-toggle vars only
+    tmpl_only = {v for v in tmpl_only
+                 if v.startswith(prefix + "_")
+                 and not _is_toggle_var(v, prefix, benchmark_type)}
+    goss_only = {v for v in goss_only
+                 if v.startswith(prefix + "_")
+                 and not _is_toggle_var(v, prefix, benchmark_type)}
+    for t_var in sorted(tmpl_only):
+        for g_var in sorted(goss_only):
+            longer = max(len(t_var), len(g_var))
+            prefix_len = len(os.path.commonprefix([t_var, g_var]))
+            if prefix_len >= longer * 0.7 and prefix_len >= 15:
+                findings.append(Finding(
+                    file="templates/ansible_vars_goss.yml.j2",
+                    line=template_output_keys.get(t_var, 0),
+                    description=(
+                        f"Possible naming mismatch: template outputs "
+                        f"'{t_var}' but goss tests expect '{g_var}'"
+                    ),
+                    severity="warning",
+                    check_name="template_goss_var_xref",
+                ))
+
+    n_err = sum(1 for f in findings if f.severity == "error")
+    n_warn = sum(1 for f in findings if f.severity == "warning")
+    status = "FAIL" if n_err else ("WARN" if n_warn else "PASS")
+    summary = (f"{n_err} missing, {n_warn} warning(s) "
+               f"[goss_refs:{len(goss_non_runtime)} "
+               f"tmpl_keys:{len(tmpl_keys)} "
+               f"defaults:{len(defaults_all_keys)}]")
+    return CheckResult("Template-Goss Var Cross-Ref", status, findings,
+                       summary)
+
+
 # ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
@@ -1911,6 +2119,7 @@ CHECK_NAMES = {
     "severity_directory": "Severity-Directory Alignment",
     "goss_block_pairing": "Goss Block Pairing",
     "when_toggle_alignment": "When-Toggle Alignment",
+    "template_goss_var_xref": "Template-Goss Var Cross-Ref",
 }
 
 # Short one-line descriptions displayed as subtitles under each section heading
@@ -1971,6 +2180,11 @@ CHECK_DESCRIPTIONS: Dict[str, str] = {
     "When-Toggle Alignment": (
         "Does each STIG task's when: condition reference the "
         "correct toggle variable for its STIG_ID?"
+    ),
+    "Template-Goss Var Cross-Ref": (
+        "Does the goss template output every variable that goss "
+        "tests reference, and are template Jinja2 expressions "
+        "backed by defined defaults?"
     ),
 }
 
@@ -2078,6 +2292,18 @@ CHECK_CRITERIA: Dict[str, str] = {
         "means enabling/disabling one rule accidentally controls a different rule. "
         "Skipped for CIS."
     ),
+    "Template-Goss Var Cross-Ref": (
+        "Cross-references goss audit test .Vars.<name> references against the "
+        "YAML keys output by ansible_vars_goss.yml.j2, and verifies that every "
+        "Jinja2 expression in the template references a variable defined in "
+        "defaults/main.yml or vars/audit.yml. Findings appear here when: (A) a "
+        "goss test references a variable the template does not output — the test "
+        "will use the audit vars file default or a zero value; (B) a template "
+        "Jinja2 expression references an undefined variable — Ansible rendering "
+        "will fail or produce empty values; (C) a template output key is similar "
+        "but not identical to a goss reference — indicating a naming mismatch "
+        "that silently breaks the variable bridge between remediation and audit."
+    ),
 }
 
 
@@ -2096,7 +2322,7 @@ Check keys for --skip / --only:
   category_alignment, version_consistency, goss_include_coverage,
   config_variable_parity, goss_template_var_sync, audit_vars_completeness,
   toggle_value_sync, severity_directory, goss_block_pairing,
-  when_toggle_alignment
+  when_toggle_alignment, template_goss_var_xref
 """,
     )
     parser.add_argument(
@@ -2286,6 +2512,14 @@ def main() -> None:
     audit_vars_defined = extract_audit_vars_defined(audit_vars_path)
     log(f"  Found {len(audit_vars_defined)} defined variables")
 
+    log("Extracting template output keys...")
+    template_output_keys = extract_template_output_keys(template_path)
+    log(f"  Found {len(template_output_keys)} template output keys")
+
+    log("Extracting all defaults keys...")
+    defaults_all_keys = extract_defaults_all_keys(defaults_path)
+    log(f"  Found {len(defaults_all_keys)} defaults keys")
+
     log("Extracting toggle values from defaults/main.yml...")
     defaults_toggle_values = extract_toggle_values(defaults_path, toggle_pat)
     log(f"  Found {len(defaults_toggle_values)} toggle values")
@@ -2335,6 +2569,10 @@ def main() -> None:
     _run("goss_block_pairing", check_goss_block_pairing, audit_dir)
     _run("when_toggle_alignment", check_when_toggle_alignment,
          tasks_dir, prefix, rule_id_prefix, benchmark_type)
+    _run("template_goss_var_xref", check_template_goss_var_crossref,
+         goss_var_refs, template_output_keys, defaults_all_keys,
+         audit_vars_defined, prefix, benchmark_type,
+         template_path, defaults_path)
 
     # -----------------------------------------------------------------------
     # Report

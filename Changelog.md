@@ -9,6 +9,8 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 ### Added
 
 - **FIX Scripts:** Added suite of standalone fix scripts for common QA findings — `fix_changed_when.py`, `fix_company_naming.py`, `fix_file_modes.py`, `fix_fqcn.py`, `fix_handler_refs.py`, `fix_ignore_errors.py`, `fix_loop_control.py`, `fix_no_log.py`, `fix_spelling.py`, `fix_when_inline.py`, `check_rule_coverage.py`, `check_tags_completeness.py`, `check_var_naming.py` — with dedicated FIX Scripts README
+- **QA Repo Check: Manual Warn Count check (`manual_warn`):** New check validates that every task containing `msg: "This control requires manual remediation"` is followed by a Warn Count block that imports `warning_facts.yml` with the correct `warn_control_id`. Without this block, manual-only controls are not tracked in the Ansible run warning summary.
+- **Fix Script: `fix_warn_count.py`:** Standalone script to detect and auto-fix manual remediation tasks missing the Warn Count `warning_facts.yml` import block. Supports `--fix` for automatic remediation.
 
 ### Changed
 

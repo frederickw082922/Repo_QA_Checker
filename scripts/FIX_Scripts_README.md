@@ -25,6 +25,8 @@ Standalone Python scripts for detecting and auto-fixing common issues in [Ansibl
 | [`check_audit_keys.py`](#check_audit_keyspy) | Duplicate keys in Goss audit templates | Report only |
 | [`check_template_headers.py`](#check_template_headerspy) | Missing `{{ file_managed_by_ansible }}` header | `--fix` |
 | [`check_register_order.py`](#check_register_orderpy) | `register:` before `changed_when`/`failed_when`/`check_mode` | `--fix` |
+| [`fix_warn_count.py`](#fix_warn_countpy) | Manual remediation tasks missing `warning_facts.yml` Warn Count | `--fix` |
+| [`dependency_graph.py`](#dependency_graphpy) | Variable dependency graph (register/set_fact → all references) | Report only |
 
 ---
 
@@ -481,6 +483,72 @@ python check_register_order.py /path/to/role --summary     # One-line summary
 
 **Scans:** `tasks/` and `handlers/`. Detects `register:` followed by any of `changed_when:`, `failed_when:`, `check_mode:`, or `no_log:` at the same indentation level.
 
+### `fix_warn_count.py`
+
+Finds manual remediation tasks (`msg: "This control requires manual remediation"`) that are missing the Warn Count block. Without this block, manual-only controls are not tracked in the warning summary at the end of the Ansible run.
+
+```bash
+python fix_warn_count.py /path/to/role              # Scan only
+python fix_warn_count.py /path/to/role --fix         # Apply fixes
+```
+
+**What it fixes:**
+```yaml
+# Before                                # After
+- name: "1.1.1.6 | AUDIT | ... |       - name: "1.1.1.6 | AUDIT | ... |
+         check status"                           check status"
+  ansible.builtin.debug:                  ansible.builtin.debug:
+    msg: "This control requires             msg: "This control requires
+         manual remediation"                     manual remediation"
+                                          - name: "1.1.1.6 | AUDIT | ... |
+                                                   Warn Count"
+                                            ansible.builtin.import_tasks:
+                                              file: warning_facts.yml
+                                            vars:
+                                              warn_control_id: '1.1.1.6'
+```
+
+**Scans:** `tasks/` directory. Detects manual remediation debug messages and verifies the Warn Count import_tasks block follows. Extracts the control ID and description from the "check status" task name to generate the correct Warn Count block.
+
+### `dependency_graph.py`
+
+Builds a complete variable dependency graph for any Ansible Lockdown role. Maps every `register:` and `set_fact:` variable to all files and lines that define or reference it. Essential for safe renames, dead code detection, and understanding cross-file dependencies.
+
+```bash
+python dependency_graph.py /path/to/role                          # Full graph (table)
+python dependency_graph.py /path/to/role --var discovered_ssh_keys # Single variable
+python dependency_graph.py /path/to/role --prefix prelim_          # Filter by prefix
+python dependency_graph.py /path/to/role --orphans                 # Dead variables only
+python dependency_graph.py /path/to/role --file tasks/prelim.yml   # By file
+python dependency_graph.py /path/to/role --format json             # Machine-readable
+python dependency_graph.py /path/to/role --format dot              # Graphviz DOT
+```
+
+**Output formats:**
+
+| Format | Flag | Description |
+|--------|------|-------------|
+| Table | `--format table` (default) | Human-readable with DEF/REF annotations |
+| JSON | `--format json` | Structured JSON for tooling and scripting |
+| DOT | `--format dot` | Graphviz DOT for visual dependency diagrams |
+
+**Example output (table):**
+```
+  prelim_tmp_mnt_type  (register, set_fact)  [7 refs in 2 files]
+    DEF  tasks/prelim.yml:24  (register)
+    DEF  tasks/prelim.yml:29  (set_fact)
+    REF  tasks/prelim.yml:22, 27, 29, 32, 34
+    REF  tasks/section_1/cis_1.1.2.x.yml:35, 64
+```
+
+**Filters:** `--var` (single variable), `--prefix` (prefix match), `--orphans` (no references), `--file` (by file path). Filters can be combined.
+
+**Tracks:**
+- `register:` definitions in tasks
+- `set_fact:` key definitions
+- Top-level defaults and vars definitions
+- All references across tasks, templates, handlers, defaults, and vars
+
 ---
 
 ## Recommended Workflow
@@ -493,7 +561,7 @@ cd /path/to/role
 # Run all checks
 for script in fix_fqcn fix_file_modes fix_when_inline fix_changed_when \
               fix_handler_refs fix_no_log fix_ignore_errors fix_loop_control \
-              fix_spelling fix_grammar fix_company_naming; do
+              fix_spelling fix_grammar fix_company_naming fix_warn_count; do
     python scripts/${script}.py .
 done
 
@@ -533,10 +601,13 @@ python scripts/fix_company_naming.py . --fix --new-name "YourCompany"
 # 5. Template fixes
 python scripts/check_template_headers.py . --fix
 
-# 6. Register ordering
+# 6. Warn Count blocks
+python scripts/fix_warn_count.py . --fix
+
+# 7. Register ordering
 python scripts/check_register_order.py . --fix
 
-# 7. Review all changes
+# 8. Review all changes
 git diff
 ```
 

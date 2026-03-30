@@ -554,6 +554,7 @@ class RepoScanner:
             ("company_naming",  CompanyNamingCheck),
             ("audit_template",  AuditTemplateCheck),
             ("fqcn",            FQCNCheck),
+            ("manual_warn",     ManualWarnCountCheck),
             ("rule_coverage",   RuleCoverageCheck),
         ]
 
@@ -1361,6 +1362,84 @@ class FQCNCheck:
                            f"{len(findings)} issue(s)")
 
 
+class ManualWarnCountCheck:
+    """Check that manual remediation tasks include the Warn Count block.
+
+    Also detects block-level vars with warn_control_id — vars must be at
+    task-level (same indentation as ansible.builtin.import_tasks:), NOT at
+    block-level (same indentation as block:).
+    """
+    display_name = "Manual Warn Count"
+
+    def __init__(self, scanner: RepoScanner):
+        self.scanner = scanner
+        self.d = scanner.directory
+
+    def run(self) -> CheckResult:
+        findings: List[Finding] = []
+        tasks_dir = os.path.join(self.d, "tasks")
+        if not os.path.isdir(tasks_dir):
+            return CheckResult(self.display_name, "SKIP",
+                               summary="No tasks directory found")
+
+        for fp in self.scanner.collect_files(tasks_dir, {".yml", ".yaml"}):
+            rel = _relpath(fp, self.d)
+            lines = self.scanner.read_lines(fp)
+            i = 0
+            while i < len(lines):
+                line = lines[i].rstrip()
+
+                # --- Check 1: missing Warn Count block ---
+                if 'msg: "This control requires manual remediation"' in line:
+                    control_id = ""
+                    for back in range(i - 1, max(i - 5, -1), -1):
+                        m = re.search(
+                            r'name:\s*"([0-9.]+)\s*\|', lines[back])
+                        if m:
+                            control_id = m.group(1)
+                            break
+
+                    has_warn = False
+                    for ahead in range(i + 1, min(i + 8, len(lines))):
+                        if "Warn Count" in lines[ahead]:
+                            has_warn = True
+                            break
+                        stripped = lines[ahead].lstrip()
+                        if stripped.startswith("- name:"):
+                            break
+
+                    if not has_warn:
+                        cid_text = f" ({control_id})" if control_id else ""
+                        findings.append(Finding(
+                            rel, i + 1,
+                            f"Manual remediation task missing Warn Count "
+                            f"block{cid_text}",
+                            "warning", "manual_warn_count"))
+
+                # --- Check 2: block-level vars with warn_control_id ---
+                if (re.match(r'^  vars:\s*$', line) and
+                        i + 1 < len(lines) and
+                        re.match(r'^    warn_control_id:',
+                                 lines[i + 1].rstrip())):
+                    cid_match = re.search(
+                        r"warn_control_id:\s*['\"]?([^'\"]+)",
+                        lines[i + 1])
+                    cid = cid_match.group(1).strip() if cid_match else ""
+                    cid_text = f" ({cid})" if cid else ""
+                    findings.append(Finding(
+                        rel, i + 1,
+                        f"Block-level vars with warn_control_id{cid_text} — "
+                        f"should be task-level (same indent as "
+                        f"ansible.builtin.import_tasks:)",
+                        "warning", "block_level_warn_vars"))
+
+                i += 1
+
+        status = "PASS" if not findings else "WARN"
+        return CheckResult(self.display_name, status, findings,
+                           f"{len(findings)} issue(s)")
+
+
 class RuleCoverageCheck:
     """Check that every rule toggle in defaults has a matching task and vice versa."""
     display_name = "Rule Coverage"
@@ -1482,6 +1561,10 @@ CHECK_DESCRIPTIONS: Dict[str, str] = {
     "FQCN Usage": (
         "Are all Ansible module names fully qualified (ansible.builtin.*)?"
     ),
+    "Manual Warn Count": (
+        "Do all manual remediation tasks include the warning_facts.yml "
+        "Warn Count block?"
+    ),
     "Rule Coverage": (
         "Does every rule toggle have a corresponding task, and does every "
         "task reference a defined toggle?"
@@ -1562,6 +1645,14 @@ CHECK_CRITERIA: Dict[str, str] = {
         "requires fully qualified collection names (FQCN) for reliable module "
         "resolution. Findings appear here when bare module names are used that "
         "should be converted to their ansible.builtin.* equivalents."
+    ),
+    "Manual Warn Count": (
+        "Checks that every task containing 'This control requires manual "
+        "remediation' is followed by a Warn Count task that imports "
+        "warning_facts.yml with the correct warn_control_id. Without the "
+        "Warn Count block, manual-only controls are not tracked in the "
+        "warning summary at the end of the Ansible run, making it easy to "
+        "miss controls that still need human attention."
     ),
     "Rule Coverage": (
         "Ensures all rule toggle variables defined in defaults/main.yml are "
@@ -2141,7 +2232,7 @@ def parse_args() -> argparse.Namespace:
             check names for --skip:
               yamllint, ansiblelint, spelling, grammar, unused_vars,
               var_naming, file_mode, company_naming, audit_template,
-              fqcn, rule_coverage
+              fqcn, manual_warn, rule_coverage
 
             exit codes:
               0  All checks passed (or only warnings without --strict)

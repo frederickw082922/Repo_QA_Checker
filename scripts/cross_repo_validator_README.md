@@ -32,7 +32,7 @@ Ansible-Lockdown maintains paired repositories for each security benchmark:
 | **Remediation** | `Private-AMAZON2023-STIG` | `RHEL9-CIS` | Ansible role with tasks, defaults, handlers, templates |
 | **Audit** | `AMAZON2023-STIG-Audit` | `RHEL9-CIS-Audit` | Goss test definitions, variables, audit script |
 
-Rule toggle variables, Rule_IDs (STIG), version metadata, and category/section assignments must stay synchronized across **both** repos. `cross_repo_validator.py` automates this cross-validation with 14 independent checks.
+Rule toggle variables, Rule_IDs (STIG), version metadata, and category/section assignments must stay synchronized across **both** repos. `cross_repo_validator.py` automates this cross-validation with 15 independent checks.
 
 Key features:
 
@@ -139,7 +139,7 @@ Check keys for --skip / --only:
   category_alignment, version_consistency, goss_include_coverage,
   config_variable_parity, goss_template_var_sync, audit_vars_completeness,
   toggle_value_sync, severity_directory, goss_block_pairing,
-  when_toggle_alignment
+  when_toggle_alignment, template_goss_var_xref
 ```
 
 ### Options
@@ -201,7 +201,7 @@ Override with `-t stig` or `-t cis` if auto-detection guesses wrong.
 
 ## Checks
 
-The tool runs 14 independent checks. Each produces a status of **PASS**, **FAIL**, **WARN**, or **SKIP**.
+The tool runs 15 independent checks. Each produces a status of **PASS**, **FAIL**, **WARN**, or **SKIP**.
 
 ### Check 1: Rule Toggle Sync
 
@@ -396,6 +396,30 @@ Catches copy-paste errors where a task was duplicated but the `when:` condition 
 
 ---
 
+### Check 15: Template-Goss Var Cross-Ref
+
+**Key:** `template_goss_var_xref`
+
+Cross-references goss `.Vars.*` references against the remediation template output keys and `defaults/main.yml`. Ensures the template will actually produce every variable that goss tests expect at runtime.
+
+Three sub-checks:
+
+| Sub-check | What It Validates | Severity |
+|-----------|-------------------|----------|
+| **A: Missing from template** | Goss tests reference `.Vars.xxx` but the template has no output key `xxx` — goss will get an empty value at runtime | error |
+| **B: Undefined defaults** | Template outputs `{{ ubtu20cis_xxx }}` but `ubtu20cis_xxx` is not defined in `defaults/main.yml` — Ansible will fail or produce an empty value | warning |
+| **C: Naming mismatches** | Template output key and goss reference share >70% similarity but differ — likely a typo or rename that wasn't propagated | warning |
+
+**Smart filtering:**
+
+- Jinja2 loop variables (`{% for server in ... %}`) and `{% if VAR is defined %}` guard variables are excluded from the undefined-defaults check to avoid false positives
+- Rule toggle variables (`{prefix}_rule_*` for CIS, `{prefix}_NNNNNN` for STIG) are excluded from naming mismatch detection since toggles with adjacent IDs naturally share high similarity
+- Variables already defined in the audit vars file (`vars/CIS.yml` or `vars/STIG.yml`) are considered valid sources for template expressions
+
+**Severity:** error (missing from template), warning (undefined defaults, naming mismatches)
+
+---
+
 ### Skipping Checks
 
 ```bash
@@ -428,6 +452,7 @@ python3 cross_repo_validator.py -r repo --only rule_id_match,rule_key_match
 | `severity_directory` | Severity-Directory Alignment |
 | `goss_block_pairing` | Goss Block Pairing |
 | `when_toggle_alignment` | When-Toggle Alignment |
+| `template_goss_var_xref` | Template-Goss Var Cross-Ref |
 
 ---
 
@@ -720,7 +745,7 @@ the same values in defaults and audit vars?*
                         |              |
   templates/            |  cross_repo  |   cat_*/*.yml    (STIG)
     ansible_vars_       +--validator---+   section_*/*.yml (CIS)
-    goss.yml.j2         |  14 checks  |     (conditionals,
+    goss.yml.j2         |  15 checks  |     (conditionals,
     (rule toggles)      |              |      Rule_IDs,
                         |              +--    rule keys,
   tasks/              --+              |      categories)
@@ -775,7 +800,7 @@ Results are formatted into Markdown, HTML, or JSON. Each check section includes 
 |--------|--------------------|---------------------|
 | **Scope** | Single repo (remediation OR audit) | Two repos (remediation AND audit) |
 | **Location** | `Repo_QA_Checker/` | `scripts/` |
-| **Checks** | 11 (lint, spelling, grammar, FQCN, etc.) | 14 (toggle sync, Rule_ID, config parity, block pairing, etc.) |
+| **Checks** | 11 (lint, spelling, grammar, FQCN, etc.) | 15 (toggle sync, Rule_ID, config parity, template-goss xref, etc.) |
 | **Benchmark Types** | STIG and CIS | STIG and CIS |
 | **Data Models** | `Finding`, `CheckResult` dataclasses | Same dataclass pattern (compatible) |
 | **Dependencies** | Python 3.8+ (optional: yamllint, ansible-lint) | Python 3.8+ only |

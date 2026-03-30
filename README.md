@@ -21,6 +21,7 @@ Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/a
 - [pre-commit Integration](#pre-commit-integration)
 - [CI/CD Integration](#cicd-integration)
 - [Examples](#examples)
+- [Standalone Scripts](#standalone-scripts)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
 
@@ -625,6 +626,36 @@ python3 Ansible_Lockdown_QA_Repo_Check.py --save-baseline baseline.json --no-rep
 
 # After making changes, check for new issues
 python3 Ansible_Lockdown_QA_Repo_Check.py --baseline baseline.json --console --no-report
+```
+
+---
+
+## Standalone Scripts
+
+The `scripts/` directory contains standalone Python scripts for targeted fixes and analysis. See [`scripts/FIX_Scripts_README.md`](scripts/FIX_Scripts_README.md) for full documentation.
+
+**Key scripts:**
+
+| Script | Description |
+|--------|-------------|
+| `check_var_naming.py` | Register prefix validation, duplicate detection, forward/reverse coverage |
+| `dependency_graph.py` | Variable dependency graph — maps every register/set_fact to all references |
+| `check_rule_coverage.py` | Rule toggle ↔ task coverage gaps |
+| `fix_fqcn.py` | Bare module names → `ansible.builtin.*` |
+| `fix_warn_count.py` | Missing Warn Count blocks on manual remediation tasks |
+| `cross_repo_validator.py` | Validates remediation + audit repo pairs |
+
+**Quick example — dependency graph:**
+
+```bash
+# See all references for a specific variable
+python scripts/dependency_graph.py /path/to/role --var prelim_tmp_mnt_type
+
+# Find orphaned variables (defined but never referenced)
+python scripts/dependency_graph.py /path/to/role --orphans
+
+# Export full graph as JSON for scripting
+python scripts/dependency_graph.py /path/to/role --format json > graph.json
 ```
 
 ---
