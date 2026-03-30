@@ -40,6 +40,85 @@ ANSIBLE_BUILTINS = {
 }
 
 
+def extract_bridge_template_output_keys(repo_path):
+    """Extract output key names from the goss bridge template.
+
+    In ansible_vars_goss.yml.j2, lines like 'some_key: {{ some_var }}'
+    define output keys (left-hand side) that are NOT variable references.
+    These should not be flagged as 'referenced but not defined'.
+    """
+    output_keys = set()
+    template_path = os.path.join(repo_path, "templates",
+                                 "ansible_vars_goss.yml.j2")
+    if not os.path.isfile(template_path):
+        return output_keys
+
+    with open(template_path, "r", encoding="utf-8") as f:
+        for line in f:
+            s = line.rstrip()
+            # Skip comments, Jinja2 control, empty lines, indented (list items)
+            if not s or s.startswith("#") or s.startswith("{%"):
+                continue
+            # Match top-level YAML keys: 'key_name: ...' (not indented or 2-space indented for nested)
+            m = re.match(r"^(\s*)([a-zA-Z_]\w*)\s*:", s)
+            if m:
+                output_keys.add(m.group(2))
+    return output_keys
+
+
+def extract_set_fact_vars(repo_path):
+    """Extract variables created by set_fact tasks in task files.
+
+    These are runtime-created variables, not expected in defaults/main.yml.
+    """
+    fact_vars = set()
+    tasks_dir = os.path.join(repo_path, "tasks")
+    if not os.path.isdir(tasks_dir):
+        return fact_vars
+
+    for root, dirs, filenames in os.walk(tasks_dir):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for fname in filenames:
+            if not fname.endswith((".yml", ".yaml")):
+                continue
+            filepath = os.path.join(root, fname)
+            in_set_fact = False
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    s = line.rstrip()
+                    if re.search(r"set_fact:", s):
+                        in_set_fact = True
+                        continue
+                    if in_set_fact:
+                        fm = re.match(r"\s+([a-zA-Z_]\w*):", s)
+                        if fm:
+                            fact_vars.add(fm.group(1))
+                        elif s and not s.startswith("#") and not s.startswith(" "):
+                            in_set_fact = False
+    return fact_vars
+
+
+def extract_handler_register_vars(repo_path):
+    """Extract register variables from handler files."""
+    handler_vars = set()
+    handlers_dir = os.path.join(repo_path, "handlers")
+    if not os.path.isdir(handlers_dir):
+        return handler_vars
+
+    for root, dirs, filenames in os.walk(handlers_dir):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for fname in filenames:
+            if not fname.endswith((".yml", ".yaml")):
+                continue
+            filepath = os.path.join(root, fname)
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    rm = re.match(r"\s*register:\s*(\S+)", line)
+                    if rm:
+                        handler_vars.add(rm.group(1))
+    return handler_vars
+
+
 def detect_prefixes(repo_path):
     """Auto-detect benchmark variable prefixes from defaults/main.yml.
 
@@ -302,6 +381,10 @@ def check_forward_reverse(repo_path, config_prefix, rule_prefix, benchmark_type)
     prefix_patterns = [re.escape(p) + r"_[a-zA-Z0-9_]+" for p in prefixes]
     combined_pat = re.compile(r"\b(" + "|".join(prefix_patterns) + r")\b")
 
+    # Regex to detect template src/dest lines where tokens are file paths, not vars
+    template_path_pat = re.compile(
+        r"^\s*(src|dest|path|creates|removes):\s")
+
     referenced = {}
     for subdir in ("tasks", "templates", "handlers"):
         dirpath = os.path.join(repo_path, subdir)
@@ -318,12 +401,17 @@ def check_forward_reverse(repo_path, config_prefix, rule_prefix, benchmark_type)
                     for num, line in enumerate(f, 1):
                         if line.lstrip().startswith("#"):
                             continue
+                        # Skip template src/dest lines — tokens there are
+                        # file paths (e.g. audit/ubtu20cis_6_3_3_1_scope.rules.j2)
+                        # not variable references
+                        if template_path_pat.match(line):
+                            continue
                         for m in combined_pat.finditer(line):
                             vname = m.group(1)
                             if vname not in referenced:
                                 referenced[vname] = (rel, num)
 
-    # Collect dynamic vars (registers, set_fact)
+    # Collect dynamic vars (registers, set_fact, handler registers)
     dynamic_vars = set()
     tasks_dir = os.path.join(repo_path, "tasks")
     if os.path.isdir(tasks_dir):
@@ -339,8 +427,14 @@ def check_forward_reverse(repo_path, config_prefix, rule_prefix, benchmark_type)
                         if rm:
                             dynamic_vars.add(rm.group(1))
 
+    # Collect set_fact vars, handler register vars, and bridge template output keys
+    set_fact_vars = extract_set_fact_vars(repo_path)
+    handler_reg_vars = extract_handler_register_vars(repo_path)
+    bridge_output_keys = extract_bridge_template_output_keys(repo_path)
+
     # Also pick up commented-out defaults
-    all_defined = set(defined.keys()) | dynamic_vars | ANSIBLE_BUILTINS
+    all_defined = (set(defined.keys()) | dynamic_vars | set_fact_vars
+                   | handler_reg_vars | bridge_output_keys | ANSIBLE_BUILTINS)
     if os.path.isfile(defaults):
         with open(defaults, "r", encoding="utf-8") as f:
             for line in f:

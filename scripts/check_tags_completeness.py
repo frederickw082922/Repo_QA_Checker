@@ -84,13 +84,19 @@ def find_task_files(repo_path):
 
 
 def parse_tasks(filepath, repo_path):
-    """Parse tasks from a YAML file and extract tag information."""
+    """Parse tasks from a YAML file and extract tag information.
+
+    Tracks block: nesting so that sub-tasks inside a tagged block are
+    marked as inheriting those tags (in_tagged_block = True).
+    """
     tasks = []
     rel = os.path.relpath(filepath, repo_path)
 
     with open(filepath, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
+    # First pass: collect all tasks with their indent, tags, and block info
+    raw_tasks = []
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -101,13 +107,15 @@ def parse_tasks(filepath, repo_path):
             i += 1
             continue
 
-        task_indent = len(name_match.group(1)) + 2
+        name_indent = len(name_match.group(1))
+        task_indent = name_indent + 2
         task_name = name_match.group(2).strip().strip("'\"")
         task_start = i
 
-        # Scan task block for tags
+        # Scan task block for tags and block: key
         tags = []
         has_tags = False
+        has_block = False
         end_of_task = len(lines)
 
         j = i + 1
@@ -128,6 +136,13 @@ def parse_tasks(filepath, repo_path):
                 end_of_task = j
                 break
 
+            # Detect block: key at the task's own indent level
+            # Note: tstripped preserves trailing newline from lstrip(),
+            # so use .strip() for exact string comparisons
+            tclean = tstripped.strip()
+            if tindent == task_indent and tclean == "block:":
+                has_block = True
+
             # Inline tags: "tags: value" or "tags: [v1, v2]"
             tags_inline = re.match(r"\s*tags:\s+(.+)", tline)
             if tags_inline:
@@ -141,8 +156,8 @@ def parse_tasks(filepath, repo_path):
                 else:
                     tags.append(val.strip("'\""))
 
-            # Block tags list
-            if tstripped == "tags:":
+            # Block tags list (bare "tags:" on its own line)
+            if tclean == "tags:":
                 has_tags = True
                 k = j + 1
                 while k < len(lines):
@@ -162,15 +177,42 @@ def parse_tasks(filepath, repo_path):
         if j >= len(lines):
             end_of_task = len(lines)
 
-        tasks.append({
+        raw_tasks.append({
             "file": rel,
             "line": task_start + 1,
             "name": task_name,
             "has_tags": has_tags,
             "tags": tags,
+            "name_indent": name_indent,
+            "has_block": has_block,
         })
 
         i = end_of_task if end_of_task > i else i + 1
+
+    # Second pass: determine block-tag inheritance
+    # Stack of (name_indent, tags) for parent blocks that have tags
+    block_stack = []
+
+    for task in raw_tasks:
+        # Pop blocks that are at the same or deeper indent (we've left them)
+        while block_stack and block_stack[-1][0] >= task["name_indent"]:
+            block_stack.pop()
+
+        # Check if this task is inside a tagged block
+        in_tagged_block = len(block_stack) > 0
+
+        # If this task has a block with tags, push onto stack
+        if task["has_block"] and task["has_tags"]:
+            block_stack.append((task["name_indent"], task["tags"]))
+
+        tasks.append({
+            "file": task["file"],
+            "line": task["line"],
+            "name": task["name"],
+            "has_tags": task["has_tags"],
+            "tags": task["tags"],
+            "in_tagged_block": in_tagged_block,
+        })
 
     return tasks
 
@@ -184,7 +226,28 @@ def check_task_tags(task, benchmark_type, prefix, require_level, require_severit
         r"\b(PRELIM|SETUP|PRE.?AUDIT|POST.?AUDIT|GATHER)\b",
         task["name"], re.IGNORECASE))
 
+    # Section includes and infrastructure tasks inherit tags from imported files
+    is_section_include = bool(re.match(
+        r"^(SECTION\s*\|)", task["name"], re.IGNORECASE))
+    is_infra_task = bool(re.search(
+        r"\b(Import\s+(preliminary|section)|flush\s+handlers?|"
+        r"Include\s+(audit|section|pre-remediation)|"
+        r"Run\s+(parse|post)|"
+        r"Add\s+ansible\s+file|"
+        r"Setup\s+rules|"
+        r"If\s+Warning\s+count|"
+        r"Fetch\s+audit|Show\s+Audit|Output\s+Warning|"
+        r"POST\s*\|\s*(flush|reboot|FETCH))\b",
+        task["name"], re.IGNORECASE))
+
     if not task["has_tags"]:
+        # Section includes and infra tasks don't need tags — they use
+        # import_tasks which inherits tags from the imported file
+        if is_section_include or is_infra_task:
+            return issues  # no issue
+        # Sub-tasks inside a block: inherit tags from the parent block
+        if task.get("in_tagged_block"):
+            return issues  # no issue — tags inherited from parent block
         severity = "info" if is_prelim else "warning"
         issues.append({
             "type": "no_tags",
@@ -195,8 +258,10 @@ def check_task_tags(task, benchmark_type, prefix, require_level, require_severit
 
     tags_lower = [t.lower() for t in task["tags"]]
 
-    # Check for rule ID tag
-    if not is_prelim:
+    # Check for rule ID tag — skip for infrastructure tasks
+    # (tagged "always", section includes, infra orchestration tasks)
+    if not is_prelim and "always" not in tags_lower \
+            and not is_section_include and not is_infra_task:
         has_rule_id = False
         if benchmark_type == "cis":
             has_rule_id = any(re.match(r"rule_[\d_]+", t) for t in tags_lower)

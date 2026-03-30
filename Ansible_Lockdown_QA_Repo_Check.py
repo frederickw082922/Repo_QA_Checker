@@ -1271,22 +1271,52 @@ class AuditTemplateCheck:
             return CheckResult(self.display_name, "SKIP",
                                summary="Goss audit template not found")
         lines = self.scanner.read_lines(tmpl)
-        seen: Dict[str, int] = {}
+        seen: Dict[tuple, int] = {}
+        loop_depth = 0
+        cond_stack: list = []
+        cond_counter = 0
         for num, raw in enumerate(lines, 1):
             s = raw.strip()
-            if not s or s.startswith("{%") or s.startswith("#"):
+            if not s or s.startswith("#"):
+                continue
+            # Track Jinja2 control structures
+            if "{%" in s:
+                if "for " in s:
+                    loop_depth += 1
+                    continue
+                if "endfor" in s:
+                    loop_depth = max(0, loop_depth - 1)
+                    continue
+                if re.search(r"\bif\b", s):
+                    cond_counter += 1
+                    cond_stack.append(cond_counter)
+                    continue
+                if re.search(r"\b(elif|else)\b", s):
+                    cond_counter += 1
+                    if cond_stack:
+                        cond_stack[-1] = cond_counter
+                    continue
+                if "endif" in s:
+                    if cond_stack:
+                        cond_stack.pop()
+                    continue
+                continue
+            # Skip keys inside for-loops (expected repeats)
+            if loop_depth > 0:
                 continue
             key_m = re.match(r"^(\w[\w.]*)\s*:", s)
             if key_m:
                 key = key_m.group(1)
-                if key in seen:
+                scope = tuple(cond_stack)
+                lookup = (key, scope)
+                if lookup in seen:
                     findings.append(Finding(
                         "templates/ansible_vars_goss.yml.j2", num,
                         f"Duplicate audit key '{key}' "
-                        f"(first at line {seen[key]})",
+                        f"(first at line {seen[lookup]})",
                         "warning", "audit_template"))
                 else:
-                    seen[key] = num
+                    seen[lookup] = num
         status = "PASS" if not findings else "FAIL"
         return CheckResult(self.display_name, status, findings,
                            f"{len(findings)} issue(s)")

@@ -47,22 +47,47 @@ def find_audit_templates(repo_path, extra_patterns=None):
 
 
 def extract_keys(filepath):
-    """Extract YAML keys with their indentation level and line number."""
+    """Extract YAML keys with their indentation level and line number.
+
+    Tracks Jinja2 control structures:
+    - {% for %} / {% endfor %}: keys inside loops are marked in_loop
+    - {% if %} / {% elif %} / {% else %} / {% endif %}: each branch
+      gets a unique scope ID so the same key in different branches
+      is not considered a duplicate
+    """
     keys = []
     key_pattern = re.compile(r'^(\s*)(\w[\w.-]*)\s*:')
     loop_depth = 0
+    # Stack of conditional scope IDs; each {% if %} pushes a new scope,
+    # {% elif %} / {% else %} bump the branch counter, {% endif %} pops
+    cond_stack = []
+    cond_counter = 0
 
     with open(filepath, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f, 1):
             stripped = line.strip()
 
-            # Track Jinja2 for-loop nesting
+            # Track Jinja2 control structures
             if '{%' in stripped:
                 if 'for ' in stripped:
                     loop_depth += 1
                     continue
                 if 'endfor' in stripped:
                     loop_depth = max(0, loop_depth - 1)
+                    continue
+                if re.search(r'\bif\b', stripped):
+                    cond_counter += 1
+                    cond_stack.append(cond_counter)
+                    continue
+                if re.search(r'\b(elif|else)\b', stripped):
+                    # New branch — bump counter so keys get a new scope
+                    cond_counter += 1
+                    if cond_stack:
+                        cond_stack[-1] = cond_counter
+                    continue
+                if 'endif' in stripped:
+                    if cond_stack:
+                        cond_stack.pop()
                     continue
 
             # Skip comments, Jinja2 expressions, list items
@@ -77,11 +102,15 @@ def extract_keys(filepath):
             if match:
                 indent = len(match.group(1))
                 key_name = match.group(2)
+                # Build a scope key from the conditional stack so that
+                # keys in different if/else branches don't clash
+                cond_scope = tuple(cond_stack) if cond_stack else ()
                 keys.append({
                     'key': key_name,
                     'indent': indent,
                     'line': line_num,
                     'in_loop': loop_depth > 0,
+                    'cond_scope': cond_scope,
                     'raw': line.rstrip(),
                 })
 
@@ -89,16 +118,22 @@ def extract_keys(filepath):
 
 
 def find_duplicates(keys):
-    """Find duplicate keys at the same indentation level outside loops."""
+    """Find duplicate keys at the same indentation level outside loops.
+
+    Keys inside different conditional branches ({% if %}/{% else %})
+    are not considered duplicates since only one branch renders.
+    """
     issues = []
     seen = {}  # (indent, key) -> first occurrence line
 
     for entry in keys:
-        lookup = (entry['indent'], entry['key'])
-
         # Keys inside for-loops are expected to repeat (list items)
         if entry['in_loop']:
             continue
+
+        # Include the conditional scope in the lookup so that keys
+        # in different if/else branches don't conflict
+        lookup = (entry['indent'], entry['key'], entry.get('cond_scope', ()))
 
         if lookup in seen:
             issues.append({
