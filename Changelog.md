@@ -4,13 +4,17 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
-## 2.7.0 - 2026-03-12
+## 2.7.0 - 2026-03-31
 
 ### Added
 
 - **FIX Scripts:** Added suite of standalone fix scripts for common QA findings — `fix_changed_when.py`, `fix_company_naming.py`, `fix_file_modes.py`, `fix_fqcn.py`, `fix_handler_refs.py`, `fix_ignore_errors.py`, `fix_loop_control.py`, `fix_no_log.py`, `fix_spelling.py`, `fix_when_inline.py`, `check_rule_coverage.py`, `check_tags_completeness.py`, `check_var_naming.py` — with dedicated FIX Scripts README
 - **QA Repo Check: Manual Warn Count check (`manual_warn`):** New check validates that every task containing `msg: "This control requires manual remediation"` is followed by a Warn Count block that imports `warning_facts.yml` with the correct `warn_control_id`. Without this block, manual-only controls are not tracked in the Ansible run warning summary.
 - **Fix Script: `fix_warn_count.py`:** Standalone script to detect and auto-fix manual remediation tasks missing the Warn Count `warning_facts.yml` import block. Supports `--fix` for automatic remediation.
+- **Cross-Repo Validator: Check 16 — Handler Notify Validation (`handler_notify`):** Parses `handlers/main.yml` for handler names (including `listen:` aliases) and scans all task files for `notify:` references. Detects undefined handlers (runtime errors), case mismatches (silently skipped handlers), and orphaned handlers (dead code).
+- **Cross-Repo Validator: Check 17 — Prelim Variable Dependencies (`prelim_dependencies`):** Extracts all variables registered or set via `set_fact` in `tasks/prelim.yml` and validates that every `prelim_*` reference in section task files points to a defined variable. Catches refactoring misses where prelim tasks were renamed or removed but downstream references remain.
+- **Cross-Repo Validator: Check 18 — Automation Status Tracking (`automation_status`):** Classifies each control as automated, manual, or partial by examining the Ansible modules used, then validates that automated controls have corresponding audit test files with at least one goss assertion. Reports automated vs manual counts for tracking automation progress.
+- **Cross-Repo Validator: Check 19 — File Path Alignment (`file_path_alignment`):** Extracts literal file paths from remediation task modules (`path:`, `dest:`, shell/command strings) and goss audit test blocks (`file: path:`, `mount: mountpoint:`, `command:`/`exec:` strings), then compares per control. Detects remediation paths not tested by audit (silent false pass) and audit paths not in remediation (stale tests). Includes parent/child tolerance, same-directory tolerance, glob normalization, and Jinja2 path exclusion to minimize false positives. Works for both CIS and STIG benchmarks.
 
 ### Changed
 

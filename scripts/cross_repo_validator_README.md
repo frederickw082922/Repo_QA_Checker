@@ -32,7 +32,7 @@ Ansible-Lockdown maintains paired repositories for each security benchmark:
 | **Remediation** | `Private-AMAZON2023-STIG` | `RHEL9-CIS` | Ansible role with tasks, defaults, handlers, templates |
 | **Audit** | `AMAZON2023-STIG-Audit` | `RHEL9-CIS-Audit` | Goss test definitions, variables, audit script |
 
-Rule toggle variables, Rule_IDs (STIG), version metadata, and category/section assignments must stay synchronized across **both** repos. `cross_repo_validator.py` automates this cross-validation with 15 independent checks.
+Rule toggle variables, Rule_IDs (STIG), version metadata, and category/section assignments must stay synchronized across **both** repos. `cross_repo_validator.py` automates this cross-validation with 19 independent checks.
 
 Key features:
 
@@ -139,7 +139,8 @@ Check keys for --skip / --only:
   category_alignment, version_consistency, goss_include_coverage,
   config_variable_parity, goss_template_var_sync, audit_vars_completeness,
   toggle_value_sync, severity_directory, goss_block_pairing,
-  when_toggle_alignment, template_goss_var_xref
+  when_toggle_alignment, template_goss_var_xref,
+  handler_notify, prelim_dependencies, automation_status
 ```
 
 ### Options
@@ -201,7 +202,7 @@ Override with `-t stig` or `-t cis` if auto-detection guesses wrong.
 
 ## Checks
 
-The tool runs 15 independent checks. Each produces a status of **PASS**, **FAIL**, **WARN**, or **SKIP**.
+The tool runs 19 independent checks. Each produces a status of **PASS**, **FAIL**, **WARN**, or **SKIP**.
 
 ### Check 1: Rule Toggle Sync
 
@@ -420,6 +421,84 @@ Three sub-checks:
 
 ---
 
+### Check 16: Handler Notify Validation
+
+**Key:** `handler_notify`
+
+Parses `handlers/main.yml` for handler names (including `listen:` aliases) and scans all task files for `notify:` references. Validates three things:
+
+| Sub-check | What It Validates | Severity |
+|-----------|-------------------|----------|
+| **Undefined handler** | A `notify:` references a handler name that does not exist in `handlers/main.yml` — Ansible will fail at runtime | error |
+| **Case mismatch** | A `notify:` uses different letter casing than the handler definition — Ansible handler matching is case-sensitive, so this silently skips the handler | warning |
+| **Orphaned handler** | A handler is defined but never referenced by any `notify:` — dead code or a missing notify | info |
+
+**Note:** Handlers referenced via Jinja2 expressions (e.g., `notify: "{{ handler_name }}"`) are skipped since they can't be resolved at parse time.
+
+---
+
+### Check 17: Prelim Variable Dependencies
+
+**Key:** `prelim_dependencies`
+
+Extracts all variables registered or set via `set_fact` in `tasks/prelim.yml` and scans section task files for references to `prelim_*` variables. Catches refactoring misses where a prelim task was renamed or removed but downstream references remain.
+
+**Severity:** warning
+
+**Note:** Skipped if `tasks/prelim.yml` does not exist.
+
+---
+
+### Check 18: Automation Status Tracking
+
+**Key:** `automation_status`
+
+Classifies each control as **automated**, **manual**, or **partial** by examining the Ansible modules used in its task block:
+
+| Classification | Modules Present |
+|---------------|----------------|
+| **manual** | Only `debug`, `import_tasks`, `shell`/`command` (audit-only patterns) |
+| **automated** | `package`, `lineinfile`, `template`, `file`, `systemd`, `mount`, `replace`, etc. |
+| **partial** | Mix of automated modules with manual warning patterns |
+
+Then validates that each automated control has a corresponding audit test file with at least one goss assertion. Flags:
+
+- Automated controls with **no audit test file** — remediation runs but is never validated
+- Automated controls with **empty audit tests** — test file exists but contains no assertions
+
+**Summary output** includes total automated vs manual counts for tracking automation progress over time.
+
+**Severity:** warning
+
+---
+
+### Check 19: File Path Alignment
+
+**Key:** `file_path_alignment`
+
+Extracts literal file paths from remediation task modules (`path:`, `dest:`, shell/command strings) and from goss audit test blocks (`file: path:`, `mount: mountpoint:`, `command:`/`exec:` strings). For each control present in both repos, compares the path sets.
+
+**Findings appear when:**
+
+- **Remediation writes to a file that the audit does not test** (silent false pass) — severity: warning
+- **Audit tests a file that remediation does not touch** (potential stale test) — severity: info
+
+**False positive mitigation:**
+
+| Technique | Effect |
+|-----------|--------|
+| Jinja2 `{{ }}` paths skipped | Avoids unresolvable template variables |
+| Parent/child tolerance | `/etc/ssh/sshd_config` vs `/etc/ssh/` not flagged |
+| Same-directory tolerance | `/etc/audit/rules.d/50-scope.rules` vs `/etc/audit/rules.d/*.rules` not flagged |
+| Glob chars stripped | `/etc/sudoers*` normalized to `/etc/sudoers` |
+| Empty path sets skipped | Package/service-only controls with no file paths ignored |
+
+Works for both **CIS** and **STIG** benchmarks — toggle patterns and directory structures handled via existing `benchmark_type` logic.
+
+**Severity:** warning
+
+---
+
 ### Skipping Checks
 
 ```bash
@@ -453,6 +532,10 @@ python3 cross_repo_validator.py -r repo --only rule_id_match,rule_key_match
 | `goss_block_pairing` | Goss Block Pairing |
 | `when_toggle_alignment` | When-Toggle Alignment |
 | `template_goss_var_xref` | Template-Goss Var Cross-Ref |
+| `handler_notify` | Handler Notify Validation |
+| `prelim_dependencies` | Prelim Variable Dependencies |
+| `automation_status` | Automation Status Tracking |
+| `file_path_alignment` | File Path Alignment |
 
 ---
 
@@ -745,7 +828,7 @@ the same values in defaults and audit vars?*
                         |              |
   templates/            |  cross_repo  |   cat_*/*.yml    (STIG)
     ansible_vars_       +--validator---+   section_*/*.yml (CIS)
-    goss.yml.j2         |  15 checks  |     (conditionals,
+    goss.yml.j2         |  19 checks  |     (conditionals,
     (rule toggles)      |              |      Rule_IDs,
                         |              +--    rule keys,
   tasks/              --+              |      categories)
@@ -800,7 +883,7 @@ Results are formatted into Markdown, HTML, or JSON. Each check section includes 
 |--------|--------------------|---------------------|
 | **Scope** | Single repo (remediation OR audit) | Two repos (remediation AND audit) |
 | **Location** | `Repo_QA_Checker/` | `scripts/` |
-| **Checks** | 11 (lint, spelling, grammar, FQCN, etc.) | 15 (toggle sync, Rule_ID, config parity, template-goss xref, etc.) |
+| **Checks** | 11 (lint, spelling, grammar, FQCN, etc.) | 19 (toggle sync, Rule_ID, config parity, handler notify, prelim deps, automation status, file path alignment, etc.) |
 | **Benchmark Types** | STIG and CIS | STIG and CIS |
 | **Data Models** | `Finding`, `CheckResult` dataclasses | Same dataclass pattern (compatible) |
 | **Dependencies** | Python 3.8+ (optional: yamllint, ansible-lint) | Python 3.8+ only |
