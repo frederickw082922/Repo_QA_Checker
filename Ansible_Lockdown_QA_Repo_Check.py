@@ -732,6 +732,9 @@ class AnsibleLintCheck:
                 # Skip summary/metadata lines that aren't actual findings
                 if rule.startswith("Read") or rule.startswith("Failed"):
                     continue
+                # Skip Python warnings captured from stderr (not lint findings)
+                if "ResourceWarning" in m.group(4) or "Warning" in rule:
+                    continue
                 findings.append(Finding(
                     file=m.group(1),
                     line=int(m.group(2)),
@@ -961,6 +964,10 @@ class UnusedVarCheck:
                 for num, raw in enumerate(self.scanner.read_lines(fp), 1):
                     stripped = raw.lstrip()
                     if stripped.startswith("#"):
+                        continue
+                    # Skip src:/dest:/path: lines — template filenames
+                    # contain prefix-like tokens that are not variable refs
+                    if re.match(r"\s*(src|dest|path|creates|removes):\s", stripped):
                         continue
                     for m in re.finditer(
                             r"\b(" + re.escape(prefix) + r"[a-zA-Z0-9_]+)\b",

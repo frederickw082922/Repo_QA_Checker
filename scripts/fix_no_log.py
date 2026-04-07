@@ -152,17 +152,49 @@ def scan_file(filepath, repo_path, strict=False):
         if task_module in PERMISSION_ONLY_MODULES:
             has_sensitive_content = False
 
+        # Skip set_fact tasks — they reformat data, not handle secrets directly
+        if task_module in ("ansible.builtin.set_fact", "set_fact"):
+            has_sensitive_content = False
+
+        # /etc/passwd is world-readable and doesn't contain password hashes
+        # Only flag if the task accesses actual shadow files, not passwd
+        if sensitive_reason == "handles password data" and "/etc/passwd" in task_name:
+            has_sensitive_content = False
+
         if j >= len(lines):
             end_of_task = len(lines)
 
         if has_sensitive_content and not has_no_log:
+            # Find insertion point: after when:/tags: but before block:/module
+            # Lockdown order: name → when → tags → ... → no_log → block/module
+            insert_at = task_start + 1  # default: after name:
+            k = task_start + 1
+            while k < end_of_task:
+                kline = lines[k].lstrip()
+                if kline.startswith(("when:", "- when:", "tags:", "- tags:")):
+                    # Skip past this key and its value lines
+                    k += 1
+                    kindent = len(lines[k - 1]) - len(lines[k - 1].lstrip())
+                    while k < end_of_task:
+                        nline = lines[k]
+                        nstripped = nline.lstrip()
+                        nindent = len(nline) - len(nstripped)
+                        if nstripped and nindent <= kindent and not nstripped.startswith("- "):
+                            break
+                        if nstripped.startswith("- ") and nindent <= kindent:
+                            break
+                        k += 1
+                    insert_at = k
+                else:
+                    break
+
             issues.append({
                 "file": rel,
                 "line": task_start + 1,
                 "task_name": task_name,
                 "reason": sensitive_reason,
                 "task_indent": task_indent,
-                "insert_line": task_start + 1,  # After the name: line
+                "insert_line": insert_at,
             })
 
         i = end_of_task if end_of_task > i else i + 1
