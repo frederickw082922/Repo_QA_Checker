@@ -90,14 +90,23 @@ def strip_backticks(line):
 def check_repeated_words(line, line_num, filepath):
     """Check for repeated words in a line."""
     issues = []
+    # Also skip lines that are purely YAML keys/values or Jinja2
+    if line.lstrip().startswith('{%') or line.lstrip().startswith('{{'):
+        return issues
     for match in REPEATED_WORDS.finditer(line):
         word = match.group(1).lower()
-        if word in REPEAT_WHITELIST and f'{word} {word}' not in line.lower():
-            continue
-        if word in REPEAT_WHITELIST:
-            # Only flag if it's literally "word word" adjacent
-            pass
         if len(word) < 2:
+            continue
+        # Skip common technical patterns that repeat legitimately
+        if word in REPEAT_WHITELIST:
+            continue
+        # Skip if match spans a backtick boundary or is inside a URL/path
+        context = line[max(0, match.start()-5):match.end()+5]
+        if '/' in context or '`' in context or '=' in context:
+            continue
+        # Verify the repeated word actually exists in the original line (not just stripped)
+        repeated = f'{word} {word}'
+        if repeated not in line.lower():
             continue
         issues.append({
             'file': filepath,

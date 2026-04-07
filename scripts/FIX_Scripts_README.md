@@ -8,7 +8,9 @@ Standalone Python scripts for detecting and auto-fixing common issues in [Ansibl
 
 | Script | What It Fixes / Checks | Auto-Fix |
 |--------|----------------------|----------|
+| [`run_all_checks.sh`](#run_all_checkssh) | **Runs ALL scripts below in one pass** | `--fix` `--checks` `--dry-run` |
 | [`fix_fqcn.py`](#fix_fqcnpy) | Bare module names → `ansible.builtin.*` | `--fix` |
+| [`check_file_modes.py`](#check_file_modespy) | Octal, absolute (`=`), mixed mode notation → relative (`-`) | `--fix` |
 | [`fix_file_modes.py`](#fix_file_modespy) | Unquoted file modes (`0644` → `'0644'`) | `--fix` |
 | [`fix_when_inline.py`](#fix_when_inlinepy) | Single-item `when:`/`tags:` lists → inline | `--fix` |
 | [`fix_changed_when.py`](#fix_changed_whenpy) | Missing `changed_when` on shell/command tasks | `--fix` |
@@ -72,6 +74,59 @@ Scripts that need the benchmark prefix auto-detect it from `defaults/main.yml`:
 **STIG Type B** (unified prefix): Same prefix for everything. Prefix ends in `stig` directly followed by `_6digits` (e.g. `az2023stig_000100`). Found in Amazon Linux 2023 and newer roles.
 
 All scripts detect both patterns automatically.
+
+---
+
+## Run All Scripts
+
+### `run_all_checks.sh`
+
+Bash runner that executes all check and fix scripts in one pass against any Ansible Lockdown role. Auto-detects benchmark type (CIS or STIG) from `defaults/main.yml`.
+
+```bash
+./run_all_checks.sh /path/to/role              # Full scan (checks + fix dry-run)
+./run_all_checks.sh /path/to/role --fix        # Full scan + apply all fixes
+./run_all_checks.sh /path/to/role --checks     # Only run check scripts (read-only)
+./run_all_checks.sh /path/to/role --dry-run    # Only run fix scripts (report only)
+```
+
+**Works with any Lockdown role:**
+```bash
+./run_all_checks.sh ~/repos/UBUNTU20-CIS
+./run_all_checks.sh ~/repos/RHEL9-STIG --fix
+./run_all_checks.sh ~/repos/AMAZON2-CIS --checks
+```
+
+**Features:**
+- Validates repo structure before running (checks for `defaults/main.yml` and `tasks/`)
+- Runs 7 check scripts + 13 fix scripts (dry-run by default)
+- Per-script pass/warn tracking with summary
+- Timing and meaningful exit codes: `0` = clean, `1` = warnings found, `2` = bad args or missing repo structure
+
+**Sample output:**
+```
+============================================================
+  Ansible Lockdown QA — Full Scan
+  Role: UBUNTU20-CIS
+  Path: /Users/user/repos/UBUNTU20-CIS
+  Mode: full scan (report only)
+  Date: 2026-04-07 12:00:00
+============================================================
+
+  ...individual script results...
+
+============================================================
+  Summary — UBUNTU20-CIS
+============================================================
+  Scripts run: 20
+  Clean:       14
+  Warnings:    6
+  Duration:    2s
+  Mode:        full scan (report only)
+
+  Run with --fix to apply automatic fixes
+============================================================
+```
 
 ---
 
@@ -343,6 +398,51 @@ python fix_loop_control.py /path/to/role --fix --label '"{{ item.name }}"'  # Cu
 
 ## Check Scripts (Report Only)
 
+### `check_file_modes.py`
+
+Comprehensive file mode notation checker. Detects octal, absolute symbolic (`=`), and mixed notation patterns and converts all to relative symbolic (`-`/`+`) notation per Lockdown conventions.
+
+```bash
+python check_file_modes.py /path/to/role                  # Scan all YAML files
+python check_file_modes.py /path/to/role --tasks-only      # Only scan tasks/
+python check_file_modes.py /path/to/role --fix             # Apply fixes
+```
+
+**What it detects and converts:**
+
+| Category | Before | After |
+|----------|--------|-------|
+| Octal | `mode: '0644'` | `mode: 'u-x,go-wx'` |
+| Octal | `mode: '0600'` | `mode: 'go-rwx'` |
+| Absolute (`=`) | `mode: 'u=rw,g=,o='` | `mode: 'go-rwx'` |
+| Absolute (`=`) | `mode: 'u=rw,g=r,o=r'` | `mode: 'u-x,go-wx'` |
+| Absolute (`=`) | `mode: 'u=rwx,g=,o='` | `mode: 'u+rwx,go-rwx'` |
+| Mixed | `mode: 'g=r,o-rwx'` | `mode: 'g-wx,o-rwx'` |
+
+**Handles:** Jinja2 conditional modes (e.g., `{% if ... %}u=rw,g=r,o={% endif %}`). Skips `preserve`, variable references, and values already in `-` notation.
+
+**Output:**
+```
+======================================================================
+File Mode Check Results
+======================================================================
+
+OCTAL (2):
+  tasks/auditd.yml:19  mode: '0640' -> mode: 'u-x,g-wx,o-rwx'
+  tasks/auditd.yml:36  mode: '0600' -> mode: 'go-rwx'
+
+ABSOLUTE_SYMBOLIC (1):
+  tasks/main.yml:213  mode: 'u=rwx,go=rx' -> mode: 'go-w'
+
+──────────────────────────────────────────────────────────────────────
+Total issues:     3
+  Octal:          2
+  Absolute (=):   1
+  Mixed:          0
+```
+
+---
+
 ### `check_rule_coverage.py`
 
 Cross-references rule toggle variables in `defaults/main.yml` against their usage in `tasks/`, `templates/`, and `handlers/` to find orphaned toggles and missing implementations.
@@ -553,71 +653,51 @@ python dependency_graph.py /path/to/role --format dot              # Graphviz DO
 
 ## Recommended Workflow
 
-### Quick Scan (no changes)
+### Quick Scan (no changes) — One Command
 
 ```bash
-cd /path/to/role
-
-# Run all checks
-for script in fix_fqcn fix_file_modes fix_when_inline fix_changed_when \
-              fix_handler_refs fix_no_log fix_ignore_errors fix_loop_control \
-              fix_spelling fix_grammar fix_company_naming fix_warn_count; do
-    python scripts/${script}.py .
-done
-
-python scripts/check_rule_coverage.py .
-python scripts/check_var_naming.py .
-python scripts/check_tags_completeness.py .
-python scripts/check_audit_keys.py .
-python scripts/check_template_headers.py .
-python scripts/check_register_order.py .
+# Run ALL checks and fixes (dry-run) in one pass
+./scripts/run_all_checks.sh /path/to/role
 ```
 
-### Auto-Fix (safe order)
-
-Apply fixes in this order to avoid conflicts:
+### Auto-Fix — One Command
 
 ```bash
-cd /path/to/role
+# Apply all fixes at once
+./scripts/run_all_checks.sh /path/to/role --fix
 
-# 1. Structural fixes first
-python scripts/fix_fqcn.py . --fix
-python scripts/fix_file_modes.py . --fix
+# Review changes
+cd /path/to/role && git diff
+```
 
-# 2. Format fixes
-python scripts/fix_when_inline.py . --fix
+### Targeted Runs
 
-# 3. Missing attributes
-python scripts/fix_changed_when.py . --fix
-python scripts/fix_no_log.py . --fix
-python scripts/fix_ignore_errors.py . --fix
-python scripts/fix_loop_control.py . --fix
+```bash
+# Only check scripts (read-only analysis, no fix previews)
+./scripts/run_all_checks.sh /path/to/role --checks
 
-# 4. Text fixes
-python scripts/fix_spelling.py . --fix
-python scripts/fix_grammar.py . --fix
-python scripts/fix_company_naming.py . --fix --new-name "YourCompany"
+# Only fix scripts (dry-run preview)
+./scripts/run_all_checks.sh /path/to/role --dry-run
+```
 
-# 5. Template fixes
-python scripts/check_template_headers.py . --fix
+### Individual Scripts
 
-# 6. Warn Count blocks
-python scripts/fix_warn_count.py . --fix
+Run specific scripts when working on a targeted fix:
 
-# 7. Register ordering
-python scripts/check_register_order.py . --fix
-
-# 8. Review all changes
-git diff
+```bash
+python scripts/fix_fqcn.py /path/to/role --fix        # Just FQCN
+python scripts/check_file_modes.py /path/to/role --fix  # Just file modes
+python scripts/fix_spelling.py /path/to/role --fix      # Just spelling
 ```
 
 ### CI Integration
 
 ```bash
 # Exit code 1 if any issues found — use in CI pipelines
-python scripts/fix_fqcn.py /path/to/role || exit 1
-python scripts/fix_file_modes.py /path/to/role || exit 1
+./scripts/run_all_checks.sh /path/to/role --checks
+# Or individual checks:
 python scripts/check_rule_coverage.py /path/to/role || exit 1
+python scripts/check_file_modes.py /path/to/role --tasks-only || exit 1
 ```
 
 ---

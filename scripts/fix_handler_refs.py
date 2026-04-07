@@ -225,7 +225,8 @@ def main():
     task_files = find_task_files(args.repo_path)
 
     handlers, duplicates = extract_handler_definitions(handler_files, args.repo_path)
-    refs = extract_notify_references(task_files, args.repo_path)
+    # Collect notify refs from BOTH tasks AND handlers (handler-to-handler chains)
+    refs = extract_notify_references(task_files + handler_files, args.repo_path)
 
     total_issues = 0
 

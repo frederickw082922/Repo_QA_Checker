@@ -83,6 +83,9 @@ def scan_file(filepath, repo_path):
 
                     if not has_second:
                         value = item_match.group(2).strip()
+                        # Skip multi-line or/and expressions (value ends with or/and)
+                        if re.search(r'\b(or|and)\s*$', value):
+                            break
                         issues.append({
                             "file": rel,
                             "line": i + 1,  # 1-indexed

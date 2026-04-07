@@ -38,6 +38,15 @@ PASSWORD_PATTERNS = [
 ]
 
 # Module patterns that commonly need no_log
+# YAML task keywords (not modules)
+TASK_KEYWORDS_SET = {
+    "name", "when", "register", "tags", "vars", "block", "rescue", "always",
+    "become", "become_user", "changed_when", "failed_when", "ignore_errors",
+    "loop", "loop_control", "notify", "environment", "no_log", "check_mode",
+    "retries", "delay", "until", "args", "async", "poll", "with_items",
+    "with_dict", "with_fileglob", "with_first_found",
+}
+
 SENSITIVE_MODULES = {
     "user": ["password"],
     "ansible.builtin.user": ["password"],
@@ -85,7 +94,14 @@ def scan_file(filepath, repo_path, strict=False):
         has_no_log = False
         has_sensitive_content = False
         sensitive_reason = ""
+        task_module = ""
         end_of_task = len(lines)
+
+        # Modules that only set permissions — they don't read or expose file content
+        PERMISSION_ONLY_MODULES = {
+            "ansible.builtin.file", "file",
+            "ansible.builtin.stat", "stat",
+        }
 
         j = i + 1
         while j < len(lines):
@@ -102,6 +118,14 @@ def scan_file(filepath, repo_path, strict=False):
             if tstripped.startswith("- ") and tindent <= task_indent - 2:
                 end_of_task = j
                 break
+
+            # Detect the module being used (only capture first non-keyword match)
+            if not task_module:
+                mod_m = re.match(r"\s*([a-z][a-z0-9_.]+):\s*", tline)
+                if mod_m:
+                    key = mod_m.group(1)
+                    if key not in TASK_KEYWORDS_SET:
+                        task_module = key
 
             # Check for no_log
             if re.match(r"\s*no_log:", tline):
@@ -123,6 +147,10 @@ def scan_file(filepath, repo_path, strict=False):
                         break
 
             j += 1
+
+        # Skip permission-only modules (file, stat) — they don't expose content
+        if task_module in PERMISSION_ONLY_MODULES:
+            has_sensitive_content = False
 
         if j >= len(lines):
             end_of_task = len(lines)

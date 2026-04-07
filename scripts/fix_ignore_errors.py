@@ -60,6 +60,9 @@ def scan_file(filepath, repo_path):
                     continue
                 m = IGNORE_ERRORS_RE.match(line)
                 if m:
+                    # Skip lines with noqa suppression (intentional ignore_errors)
+                    if '# noqa' in line:
+                        continue
                     issues.append({
                         "file": rel,
                         "line": num,
