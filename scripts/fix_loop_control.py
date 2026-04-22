@@ -150,9 +150,12 @@ def apply_fixes(filepath, issues, custom_label=None):
         lines = f.readlines()
 
     # Process in reverse to preserve line numbers
-    for issue in sorted(issues, key=lambda i: i["last_task_line"], reverse=True):
-        indent = " " * issue["task_indent"]
-        insert_idx = issue["last_task_line"] + 1
+    for issue in sorted(issues, key=lambda i: i["loop_line_idx"], reverse=True):
+        # Use the loop keyword's indent level — this ensures loop_control
+        # goes at the same level as the loop:, even inside blocks
+        loop_line = lines[issue["loop_line_idx"]]
+        loop_indent = len(loop_line) - len(loop_line.lstrip())
+        indent = " " * loop_indent
 
         if custom_label:
             label = custom_label
@@ -161,18 +164,33 @@ def apply_fixes(filepath, issues, custom_label=None):
         else:
             label = '"{{ item }}"'
 
+        # Find where to insert: after the loop keyword and its list items
+        insert_idx = issue["loop_line_idx"] + 1
+        while insert_idx < len(lines):
+            next_line = lines[insert_idx]
+            next_stripped = next_line.lstrip()
+            if not next_stripped or next_stripped.startswith("#"):
+                insert_idx += 1
+                continue
+            next_indent = len(next_line) - len(next_stripped)
+            # Still part of the loop value (list items are indented further)
+            if next_indent > loop_indent:
+                insert_idx += 1
+                continue
+            break
+
         if issue["has_loop_control"]:
             # loop_control exists but no label — find it and add label inside
-            for k in range(issue["last_task_line"], issue["line"] - 2, -1):
+            for k in range(issue["loop_line_idx"], min(issue["loop_line_idx"] + 10, len(lines))):
                 if k < len(lines) and "loop_control:" in lines[k]:
                     lc_indent = len(lines[k]) - len(lines[k].lstrip())
                     label_line = f"{' ' * (lc_indent + 2)}label: {label}\n"
                     lines.insert(k + 1, label_line)
                     break
         else:
-            # Add both loop_control and label
+            # Add both loop_control and label at the same indent as the loop keyword
             lc_line = f"{indent}loop_control:\n"
-            label_line = f"{indent}    label: {label}\n"
+            label_line = f"{indent}  label: {label}\n"
             lines.insert(insert_idx, label_line)
             lines.insert(insert_idx, lc_line)
 
