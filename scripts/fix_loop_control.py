@@ -165,11 +165,17 @@ def apply_fixes(filepath, issues, custom_label=None):
             label = '"{{ item }}"'
 
         # Find where to insert: after the loop keyword and its list items
+        # Skip blank lines and comments, stop at next key at same or lower indent
         insert_idx = issue["loop_line_idx"] + 1
         while insert_idx < len(lines):
             next_line = lines[insert_idx]
             next_stripped = next_line.lstrip()
-            if not next_stripped or next_stripped.startswith("#"):
+            # Skip blank lines (but don't count them as loop items)
+            if not next_stripped:
+                insert_idx += 1
+                continue
+            # Skip comments
+            if next_stripped.startswith("#"):
                 insert_idx += 1
                 continue
             next_indent = len(next_line) - len(next_stripped)
@@ -178,6 +184,18 @@ def apply_fixes(filepath, issues, custom_label=None):
                 insert_idx += 1
                 continue
             break
+
+        # Guard: check if loop_control already exists at insert point
+        # (prevents duplicate insertion)
+        if insert_idx < len(lines):
+            check_line = lines[insert_idx].lstrip()
+            if check_line.startswith("loop_control:"):
+                # Already has loop_control — skip to avoid duplicate
+                if issue["has_loop_control"]:
+                    # Just needs label added inside existing loop_control
+                    pass
+                else:
+                    continue
 
         if issue["has_loop_control"]:
             # loop_control exists but no label — find it and add label inside
@@ -188,14 +206,25 @@ def apply_fixes(filepath, issues, custom_label=None):
                     lines.insert(k + 1, label_line)
                     break
         else:
-            # Add both loop_control and label at the same indent as the loop keyword
+            # Add loop_control + label at the same indent as the loop keyword
+            # No extra blank lines — insert directly
             lc_line = f"{indent}loop_control:\n"
             label_line = f"{indent}  label: {label}\n"
             lines.insert(insert_idx, label_line)
             lines.insert(insert_idx, lc_line)
 
+    # Post-fix cleanup: remove any double blank lines introduced
+    cleaned = []
+    prev_blank = False
+    for line in lines:
+        is_blank = line.strip() == ""
+        if is_blank and prev_blank:
+            continue  # skip consecutive blank lines
+        cleaned.append(line)
+        prev_blank = is_blank
+
     with open(filepath, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+        f.writelines(cleaned)
 
     return True
 

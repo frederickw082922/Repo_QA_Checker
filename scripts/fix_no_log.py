@@ -216,11 +216,35 @@ def apply_fixes(filepath, issues):
         indent = " " * issue["task_indent"]
         new_line = f"{indent}no_log: true\n"
 
-        # Insert after the name: line
+        # Guard: check if no_log already exists in the task block
+        # (prevents duplicate insertion on re-run)
+        task_start = issue["line"] - 1  # 0-indexed
+        already_has = False
+        for k in range(task_start, min(task_start + 30, len(lines))):
+            if k < len(lines) and "no_log:" in lines[k]:
+                already_has = True
+                break
+            # Stop at next task
+            if k > task_start and re.match(r"^\s*- name:", lines[k]):
+                break
+        if already_has:
+            continue
+
+        # Insert after the name:/when:/tags: lines
         lines.insert(insert_idx, new_line)
 
+    # Post-fix cleanup: remove any double blank lines
+    cleaned = []
+    prev_blank = False
+    for line in lines:
+        is_blank = line.strip() == ""
+        if is_blank and prev_blank:
+            continue
+        cleaned.append(line)
+        prev_blank = is_blank
+
     with open(filepath, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+        f.writelines(cleaned)
 
     return True
 
