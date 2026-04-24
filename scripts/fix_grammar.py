@@ -66,6 +66,10 @@ BACKTICK_CONTENT = re.compile(r'`[^`]*`')
 
 DEFAULT_SKIP_DIRS = {'.git', '.github', 'molecule', 'tests', '__pycache__', '.ansible'}
 
+# Files to skip entirely — changelogs contain historical descriptions of grammar
+# fixes (e.g., "fixed repeated words: 'is is', 'of of'") which are not errors
+SKIP_FILENAMES = {'changelog.md', 'CHANGELOG.md', 'Changelog.md'}
+
 
 # ---------------------------------------------------------------------------
 # Scanning
@@ -77,6 +81,8 @@ def find_files(repo_path, skip_dirs):
     for root, dirs, filenames in os.walk(repo_path):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
         for fname in filenames:
+            if fname in SKIP_FILENAMES:
+                continue
             if any(fname.endswith(ext) for ext in EXTENSIONS):
                 files.append(os.path.join(root, fname))
     return sorted(files)
