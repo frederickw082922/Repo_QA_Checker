@@ -164,13 +164,14 @@ def apply_fixes(filepath, issues, custom_label=None):
         else:
             label = '"{{ item }}"'
 
-        # Find where to insert: after the loop keyword and its list items
-        # Skip blank lines and comments, stop at next key at same or lower indent
+        # Find where to insert: right after the last loop list item
+        # Track the last non-blank line that's part of the loop value
         insert_idx = issue["loop_line_idx"] + 1
+        last_content_idx = issue["loop_line_idx"]
         while insert_idx < len(lines):
             next_line = lines[insert_idx]
             next_stripped = next_line.lstrip()
-            # Skip blank lines (but don't count them as loop items)
+            # Blank line — don't advance last_content_idx
             if not next_stripped:
                 insert_idx += 1
                 continue
@@ -181,9 +182,12 @@ def apply_fixes(filepath, issues, custom_label=None):
             next_indent = len(next_line) - len(next_stripped)
             # Still part of the loop value (list items are indented further)
             if next_indent > loop_indent:
+                last_content_idx = insert_idx
                 insert_idx += 1
                 continue
             break
+        # Insert right after the last loop item (not after blank lines)
+        insert_idx = last_content_idx + 1
 
         # Guard: check if loop_control already exists at insert point
         # (prevents duplicate insertion)
