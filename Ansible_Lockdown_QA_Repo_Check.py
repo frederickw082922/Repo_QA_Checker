@@ -1241,6 +1241,7 @@ class CompanyNamingCheck:
             "|".join(re.escape(n) for n in old_names),
             re.IGNORECASE)
         exclude_files = {"README.md", "CONTRIBUTING.rst", "LICENSE",
+                         "CHANGELOG.md", "Changelog.md",
                          os.path.basename(__file__)}
         files = self.scanner.collect_files(self.scanner.directory,
                                            {".yml", ".yaml", ".j2", ".md", ".py", ".sh"})

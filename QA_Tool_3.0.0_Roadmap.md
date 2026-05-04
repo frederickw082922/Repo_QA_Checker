@@ -102,10 +102,11 @@ Make the `AuditTemplateCheck` support multiple template patterns:
 
 ### 5. Smarter Reverse Variable Check (Reduce False Positives)
 
-**Status:** RHEL8-STIG report shows 19 "referenced but not defined" warnings, most
-from audit templates where vars are set by the audit role, not the hardening role
+**Status:** Partially done — `src:`/`dest:`/`path:` line exclusion fixed in 2.7.0
+(eliminated ~17 false positives from template filenames). 27 real findings remain
+from goss bridge template variables not defined in `defaults/main.yml`.
 
-Reduce noise from the `UnusedVarCheck` reverse check:
+Remaining work:
 
 - Add config option to exclude paths from the reverse check:
 
@@ -117,6 +118,7 @@ Reduce noise from the `UnusedVarCheck` reverse check:
 - Auto-detect variables that ONLY appear in audit templates and downgrade from `warning` to `info`
 - Recognize common audit-role-provided variables (e.g., `*_os_distribution`, `*_bootloader_path`)
 - Consider checking `vars/audit.yml` as a secondary definition source for template variables
+- Resolve the 27 goss template variable gaps — either add missing defaults or exclude bridge template output keys from the check
 
 ---
 
@@ -317,6 +319,99 @@ No single file exceeds ~200 lines. Each can be read, understood, and tested in i
 
 ---
 
+## New Scripts (Added in 2.7.0)
+
+The following standalone scripts were added to `scripts/` to supplement the main QA tool. They provide targeted checks and auto-fixes that can be run individually or together via `run_all_checks.sh`.
+
+### `run_all_checks.sh` — Unified Runner
+
+Executes all check and fix scripts in one pass against any Ansible Lockdown role (CIS or STIG). Auto-detects benchmark type from `defaults/main.yml`.
+
+```bash
+./scripts/run_all_checks.sh <repo_path>              # Full scan (report only)
+./scripts/run_all_checks.sh <repo_path> --fix        # Apply all fixes
+./scripts/run_all_checks.sh <repo_path> --checks     # Only check scripts
+./scripts/run_all_checks.sh <repo_path> --dry-run    # Only fix scripts (preview)
+./scripts/run_all_checks.sh <repo_path> --help       # Usage info
+```
+
+Features: repo structure validation, per-script pass/warn tracking, timing, exit codes (0=clean, 1=warnings, 2=bad args), python3 pre-flight check.
+
+### `check_file_modes.py` — File Mode Notation Checker
+
+Detects deprecated `mode:` patterns (octal, absolute symbolic `=`, mixed notation) and converts to relative symbolic (`-`/`+`) per Lockdown conventions. Handles Jinja2 conditional modes.
+
+```bash
+python scripts/check_file_modes.py <repo_path> --tasks-only     # Report
+python scripts/check_file_modes.py <repo_path> --tasks-only --fix  # Apply
+```
+
+### Script Inventory
+
+| Script | Purpose | Auto-Fix |
+|--------|---------|----------|
+| `run_all_checks.sh` | Unified runner for all scripts below | `--fix` `--checks` `--dry-run` |
+| `check_file_modes.py` | Octal/absolute/mixed mode → relative symbolic | `--fix` |
+| `check_register_order.py` | `register:` before `changed_when`/`failed_when` | `--fix` |
+| `check_rule_coverage.py` | Rule toggle ↔ task coverage gaps | Report only |
+| `check_tags_completeness.py` | Missing required tags (rule ID, level) | Report only |
+| `check_template_headers.py` | Missing `{{ file_managed_by_ansible }}` | `--fix` |
+| `check_var_naming.py` | Register prefixes, duplicates, fwd/reverse | Report only |
+| `check_audit_keys.py` | Duplicate keys in goss audit templates | Report only |
+| `fix_fqcn.py` | Bare modules → `ansible.builtin.*` | `--fix` |
+| `fix_file_modes.py` | Unquoted octal modes → quoted | `--fix` |
+| `fix_changed_when.py` | Missing `changed_when` on shell/command | `--fix` |
+| `fix_handler_refs.py` | Missing/unused/duplicate handlers | `--fix-case` `--fix-fqcn` |
+| `fix_when_inline.py` | Single-item `when:`/`tags:` → inline | `--fix` |
+| `fix_warn_count.py` | Missing `warning_facts.yml` import blocks | `--fix` |
+| `fix_spelling.py` | Common misspellings | `--fix` |
+| `fix_grammar.py` | Repeated words, apostrophes, subject-verb | `--fix` |
+| `fix_company_naming.py` | Outdated company/org names | `--fix` |
+| `fix_ignore_errors.py` | `ignore_errors: true` → `failed_when: false` | `--fix` |
+| `fix_no_log.py` | Missing `no_log: true` on sensitive tasks | `--fix` |
+| `fix_loop_control.py` | Loops missing `loop_control.label` | `--fix` |
+| `dependency_graph.py` | Variable dependency graph | Report only |
+
+### False Positive Fixes (2.7.0)
+
+The following false positives were identified during UBUNTU20-CIS v3.0.0 QA and fixed:
+
+| Script | False Positive | Fix |
+|--------|---------------|-----|
+| `fix_when_inline.py` | Multi-line `or`/`and` expressions | Skip values ending with `or`/`and` |
+| `fix_handler_refs.py` | Handler-to-handler notify chains | Scan handlers + tasks for `notify:` |
+| `fix_ignore_errors.py` | `# noqa` suppressed lines | Skip lines with `# noqa` |
+| `fix_no_log.py` | `ansible.builtin.file` on shadow paths | Skip permission-only modules |
+| `fix_no_log.py` | `/etc/passwd` (world-readable) | Skip tasks parsing passwd, not shadow |
+| `fix_grammar.py` | Repeated words in URLs/paths/backticks | Context-aware matching |
+| Main QA script | Template filenames as variable refs | Skip `src:`/`dest:`/`path:` lines |
+| Main QA script | Python ResourceWarning as lint finding | Filter stderr warnings |
+
+### Scripts Not Yet in Main QA Tool
+
+The following standalone scripts provide checks/fixes that the main `Ansible_Lockdown_QA_Repo_Check.py` does not yet have. Each should be consolidated into the main tool as part of the modular refactor (item 12):
+
+| Script | Main Tool Equivalent | Gap |
+|--------|---------------------|-----|
+| `fix_changed_when.py` | None | No changed_when check in main tool |
+| `fix_handler_refs.py` | None | No handler integrity check in main tool |
+| `fix_when_inline.py` | None | No single-item list check in main tool |
+| `fix_warn_count.py` | `Manual Warn Count` | Main tool detects but can't auto-fix |
+| `fix_ignore_errors.py` | None | No ignore_errors check in main tool |
+| `fix_no_log.py` | None | No sensitive task check in main tool |
+| `fix_loop_control.py` | None | No loop_control check in main tool |
+| `check_tags_completeness.py` | None | No tag completeness check in main tool |
+| `check_register_order.py` | None | No register ordering check in main tool |
+| `check_file_modes.py` | `File Mode Quoting` | Main tool only quotes octal; doesn't check `=` notation |
+| `dependency_graph.py` | None | No variable dependency graph in main tool |
+| `cross_repo_validator.py` | None | Separate tool; not included in `run_all_checks.sh` |
+
+### Consolidation Roadmap
+
+These standalone scripts serve as the implementation for items 1-2 in the summary table below. The long-term goal is to consolidate them into the main `Ansible_Lockdown_QA_Repo_Check.py` as part of the modular refactor (item 12). Until then, `run_all_checks.sh` provides a single entry point that runs both the standalone scripts and complements the main QA tool.
+
+---
+
 ## Summary
 
 | # | Feature | Type | Priority | Eliminates Script |
@@ -333,7 +428,16 @@ No single file exceeds ~200 lines. Each can be read, understood, and tested in i
 | 10 | Wider Duplicate Search | Enhance existing | Low | -- |
 | 11 | Pre-commit Fix Hook | New hook entry | Low | -- |
 | 12 | Modular File Structure | Refactor | High | -- |
+| 13 | File Mode Notation Check | New check + auto-fix | **Done** | `check_file_modes.py` + `fix_file_modes.py` |
+| 14 | Unified Script Runner | New tool | **Done** | Manual for-loop workflow |
+| 15 | False Positive Reduction | Fix existing | **Done** | ~41 false positives across 8 scripts |
+| 16 | Standalone Script Consolidation | Integrate into main tool | Medium | 12 scripts (see table above) |
+| 17 | Cross-Repo Validator in Runner | Add to `run_all_checks.sh` | Medium | `cross_repo_validator.py` |
+| 18 | Molecule Container Testing | New check | Medium | Manual molecule setup/debugging |
+| 19 | Goss Template Variable Resolution | Fix or exclude | Medium | 27 bridge template var gaps |
+| 20 | Dependency Graph Integration | Integrate into main tool | Low | `dependency_graph.py` |
 
 **Target:** Completing items 1-3 and 12 would consolidate all standalone scripts
 into one tool, break the single file into manageable modules, and justify a 3.0.0
-version bump.
+version bump. Items 13-15 are complete as of 2026-04-07. Items 16-20 are new gaps
+identified during UBUNTU20-CIS v3.0.0 QA.
