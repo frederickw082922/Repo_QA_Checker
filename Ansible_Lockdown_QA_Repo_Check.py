@@ -552,6 +552,7 @@ class RepoScanner:
             ("var_naming",      VarNamingCheck),
             ("file_mode",       FileModeCheck),
             ("company_naming",  CompanyNamingCheck),
+            ("meta_validate",   MetaValidateCheck),
             ("audit_template",  AuditTemplateCheck),
             ("fqcn",            FQCNCheck),
             ("manual_warn",     ManualWarnCountCheck),
@@ -1261,6 +1262,71 @@ class CompanyNamingCheck:
                         f"Outdated company name '{m.group()}' found",
                         "warning", "company_naming"))
         status = "PASS" if not findings else "FAIL"
+        return CheckResult(self.display_name, status, findings,
+                           f"{len(findings)} issue(s)")
+
+
+class MetaValidateCheck:
+    """Check meta/main.yml for author, company, and min_ansible_version."""
+
+    display_name = "Meta Validate"
+
+    # Expected values
+    EXPECTED_AUTHOR = "Ansible-Lockdown Team"
+    EXPECTED_COMPANY = "MindPoint Group - A Tyto Athene Company"
+    MIN_ANSIBLE_VERSION = "2.16.1"
+
+    def __init__(self, scanner: RepoScanner):
+        self.scanner = scanner
+
+    def run(self) -> CheckResult:
+        findings: List[Finding] = []
+        meta_path = os.path.join(self.scanner.directory, "meta", "main.yml")
+        if not os.path.isfile(meta_path):
+            findings.append(Finding(
+                "meta/main.yml", 0, "meta/main.yml not found",
+                "error", "meta_validate"))
+            return CheckResult(self.display_name, "FAIL", findings,
+                               f"{len(findings)} issue(s)")
+
+        try:
+            import yaml as _yaml
+            with open(meta_path) as f:
+                meta = _yaml.safe_load(f)
+        except Exception as e:
+            findings.append(Finding(
+                "meta/main.yml", 0, f"Failed to parse: {e}",
+                "error", "meta_validate"))
+            return CheckResult(self.display_name, "FAIL", findings,
+                               f"{len(findings)} issue(s)")
+
+        gi = meta.get("galaxy_info", {}) if meta else {}
+
+        # Check author
+        author = gi.get("author", "")
+        if author != self.EXPECTED_AUTHOR:
+            findings.append(Finding(
+                "meta/main.yml", 0,
+                f"author: '{author}' should be '{self.EXPECTED_AUTHOR}'",
+                "warning", "meta_validate"))
+
+        # Check company
+        company = gi.get("company", "")
+        if company != self.EXPECTED_COMPANY:
+            findings.append(Finding(
+                "meta/main.yml", 0,
+                f"company: '{company}' should be '{self.EXPECTED_COMPANY}'",
+                "warning", "meta_validate"))
+
+        # Check min_ansible_version
+        mav = str(gi.get("min_ansible_version", ""))
+        if mav and mav < self.MIN_ANSIBLE_VERSION:
+            findings.append(Finding(
+                "meta/main.yml", 0,
+                f"min_ansible_version: '{mav}' should be '{self.MIN_ANSIBLE_VERSION}' or newer",
+                "warning", "meta_validate"))
+
+        status = "PASS" if not findings else "WARN"
         return CheckResult(self.display_name, status, findings,
                            f"{len(findings)} issue(s)")
 
