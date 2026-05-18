@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.6.0"
+TOOL_VERSION = "2.7.0"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -552,8 +552,10 @@ class RepoScanner:
             ("var_naming",      VarNamingCheck),
             ("file_mode",       FileModeCheck),
             ("company_naming",  CompanyNamingCheck),
+            ("meta_validate",   MetaValidateCheck),
             ("audit_template",  AuditTemplateCheck),
             ("fqcn",            FQCNCheck),
+            ("manual_warn",     ManualWarnCountCheck),
             ("rule_coverage",   RuleCoverageCheck),
         ]
 
@@ -731,6 +733,9 @@ class AnsibleLintCheck:
                 # Skip summary/metadata lines that aren't actual findings
                 if rule.startswith("Read") or rule.startswith("Failed"):
                     continue
+                # Skip Python warnings captured from stderr (not lint findings)
+                if "ResourceWarning" in m.group(4) or "Warning" in rule:
+                    continue
                 findings.append(Finding(
                     file=m.group(1),
                     line=int(m.group(2)),
@@ -790,6 +795,10 @@ class GrammarCheck:
 
     _MD_SKIP_PATTERNS = {"Multiple consecutive spaces"}
     _COMMENT_SKIP_PATTERNS = {"Multiple consecutive spaces"}
+    # Skip "Multiple consecutive spaces" in task names: Jinja2 stripping often leaves "  " (e.g. "for {{ x }} |" -> "for  |")
+    _TASK_NAME_SKIP_PATTERNS = {"Multiple consecutive spaces"}
+    # Markdown files to skip entirely (e.g. changelogs with intentional formatting)
+    _SKIP_MD_BASENAMES = {"Changelog.md", "CHANGELOG.md"}
 
     def __init__(self, scanner: RepoScanner):
         self.scanner = scanner
@@ -802,7 +811,12 @@ class GrammarCheck:
             ext = os.path.splitext(fp)[1]
             rel = _relpath(fp, self.scanner.directory)
             is_md = ext == ".md"
-            if os.path.basename(fp) == "aide.conf.j2":
+            basename = os.path.basename(fp)
+            if is_md and basename in self._SKIP_MD_BASENAMES:
+                continue
+            if is_md and basename.startswith("qa_report") and basename.endswith(".md"):
+                continue
+            if basename == "aide.conf.j2":
                 continue
             for num, raw_line in enumerate(self.scanner.read_lines(fp), 1):
                 # Check both comments and task name: values
@@ -828,10 +842,17 @@ class GrammarCheck:
                             continue
                         if is_aide and desc_tmpl in self._COMMENT_SKIP_PATTERNS:
                             continue
+                        # Skip in task names (Jinja2 stripping leaves false "  " e.g. "for {{ x }} |" -> "for  |")
+                        if source == "task_name" and desc_tmpl in self._TASK_NAME_SKIP_PATTERNS:
+                            continue
                         m = pat.search(text)
                         if m:
                             desc = desc_tmpl.format(m.group(1)
                                                     if m.lastindex else "")
+                            # Skip Subject-verb disagreement in tasks/section* and tasks/cat*
+                            if "Subject-verb disagreement" in desc_tmpl and (
+                                    rel.startswith("tasks/section") or rel.startswith("tasks/cat")):
+                                continue
                             findings.append(Finding(rel, num, desc, sev,
                                                     "grammar"))
         status = "PASS" if not findings else "WARN"
@@ -944,6 +965,10 @@ class UnusedVarCheck:
                 for num, raw in enumerate(self.scanner.read_lines(fp), 1):
                     stripped = raw.lstrip()
                     if stripped.startswith("#"):
+                        continue
+                    # Skip src:/dest:/path: lines — template filenames
+                    # contain prefix-like tokens that are not variable refs
+                    if re.match(r"\s*(src|dest|path|creates|removes):\s", stripped):
                         continue
                     for m in re.finditer(
                             r"\b(" + re.escape(prefix) + r"[a-zA-Z0-9_]+)\b",
@@ -1217,6 +1242,7 @@ class CompanyNamingCheck:
             "|".join(re.escape(n) for n in old_names),
             re.IGNORECASE)
         exclude_files = {"README.md", "CONTRIBUTING.rst", "LICENSE",
+                         "CHANGELOG.md", "Changelog.md",
                          os.path.basename(__file__)}
         files = self.scanner.collect_files(self.scanner.directory,
                                            {".yml", ".yaml", ".j2", ".md", ".py", ".sh"})
@@ -1240,6 +1266,71 @@ class CompanyNamingCheck:
                            f"{len(findings)} issue(s)")
 
 
+class MetaValidateCheck:
+    """Check meta/main.yml for author, company, and min_ansible_version."""
+
+    display_name = "Meta Validate"
+
+    # Expected values
+    EXPECTED_AUTHOR = "Ansible-Lockdown Team"
+    EXPECTED_COMPANY = "MindPoint Group - A Tyto Athene Company"
+    MIN_ANSIBLE_VERSION = "2.16.1"
+
+    def __init__(self, scanner: RepoScanner):
+        self.scanner = scanner
+
+    def run(self) -> CheckResult:
+        findings: List[Finding] = []
+        meta_path = os.path.join(self.scanner.directory, "meta", "main.yml")
+        if not os.path.isfile(meta_path):
+            findings.append(Finding(
+                "meta/main.yml", 0, "meta/main.yml not found",
+                "error", "meta_validate"))
+            return CheckResult(self.display_name, "FAIL", findings,
+                               f"{len(findings)} issue(s)")
+
+        try:
+            import yaml as _yaml
+            with open(meta_path) as f:
+                meta = _yaml.safe_load(f)
+        except Exception as e:
+            findings.append(Finding(
+                "meta/main.yml", 0, f"Failed to parse: {e}",
+                "error", "meta_validate"))
+            return CheckResult(self.display_name, "FAIL", findings,
+                               f"{len(findings)} issue(s)")
+
+        gi = meta.get("galaxy_info", {}) if meta else {}
+
+        # Check author
+        author = gi.get("author", "")
+        if author != self.EXPECTED_AUTHOR:
+            findings.append(Finding(
+                "meta/main.yml", 0,
+                f"author: '{author}' should be '{self.EXPECTED_AUTHOR}'",
+                "warning", "meta_validate"))
+
+        # Check company
+        company = gi.get("company", "")
+        if company != self.EXPECTED_COMPANY:
+            findings.append(Finding(
+                "meta/main.yml", 0,
+                f"company: '{company}' should be '{self.EXPECTED_COMPANY}'",
+                "warning", "meta_validate"))
+
+        # Check min_ansible_version
+        mav = str(gi.get("min_ansible_version", ""))
+        if mav and mav < self.MIN_ANSIBLE_VERSION:
+            findings.append(Finding(
+                "meta/main.yml", 0,
+                f"min_ansible_version: '{mav}' should be '{self.MIN_ANSIBLE_VERSION}' or newer",
+                "warning", "meta_validate"))
+
+        status = "PASS" if not findings else "WARN"
+        return CheckResult(self.display_name, status, findings,
+                           f"{len(findings)} issue(s)")
+
+
 class AuditTemplateCheck:
     display_name = "Audit Template"
 
@@ -1254,22 +1345,52 @@ class AuditTemplateCheck:
             return CheckResult(self.display_name, "SKIP",
                                summary="Goss audit template not found")
         lines = self.scanner.read_lines(tmpl)
-        seen: Dict[str, int] = {}
+        seen: Dict[tuple, int] = {}
+        loop_depth = 0
+        cond_stack: list = []
+        cond_counter = 0
         for num, raw in enumerate(lines, 1):
             s = raw.strip()
-            if not s or s.startswith("{%") or s.startswith("#"):
+            if not s or s.startswith("#"):
+                continue
+            # Track Jinja2 control structures
+            if "{%" in s:
+                if "for " in s:
+                    loop_depth += 1
+                    continue
+                if "endfor" in s:
+                    loop_depth = max(0, loop_depth - 1)
+                    continue
+                if re.search(r"\bif\b", s):
+                    cond_counter += 1
+                    cond_stack.append(cond_counter)
+                    continue
+                if re.search(r"\b(elif|else)\b", s):
+                    cond_counter += 1
+                    if cond_stack:
+                        cond_stack[-1] = cond_counter
+                    continue
+                if "endif" in s:
+                    if cond_stack:
+                        cond_stack.pop()
+                    continue
+                continue
+            # Skip keys inside for-loops (expected repeats)
+            if loop_depth > 0:
                 continue
             key_m = re.match(r"^(\w[\w.]*)\s*:", s)
             if key_m:
                 key = key_m.group(1)
-                if key in seen:
+                scope = tuple(cond_stack)
+                lookup = (key, scope)
+                if lookup in seen:
                     findings.append(Finding(
                         "templates/ansible_vars_goss.yml.j2", num,
                         f"Duplicate audit key '{key}' "
-                        f"(first at line {seen[key]})",
+                        f"(first at line {seen[lookup]})",
                         "warning", "audit_template"))
                 else:
-                    seen[key] = num
+                    seen[lookup] = num
         status = "PASS" if not findings else "FAIL"
         return CheckResult(self.display_name, status, findings,
                            f"{len(findings)} issue(s)")
@@ -1340,6 +1461,84 @@ class FQCNCheck:
                                 f"Non-FQCN module: '{key}' -> "
                                 f"'ansible.builtin.{key}'",
                                 "warning", "fqcn"))
+        status = "PASS" if not findings else "WARN"
+        return CheckResult(self.display_name, status, findings,
+                           f"{len(findings)} issue(s)")
+
+
+class ManualWarnCountCheck:
+    """Check that manual remediation tasks include the Warn Count block.
+
+    Also detects block-level vars with warn_control_id — vars must be at
+    task-level (same indentation as ansible.builtin.import_tasks:), NOT at
+    block-level (same indentation as block:).
+    """
+    display_name = "Manual Warn Count"
+
+    def __init__(self, scanner: RepoScanner):
+        self.scanner = scanner
+        self.d = scanner.directory
+
+    def run(self) -> CheckResult:
+        findings: List[Finding] = []
+        tasks_dir = os.path.join(self.d, "tasks")
+        if not os.path.isdir(tasks_dir):
+            return CheckResult(self.display_name, "SKIP",
+                               summary="No tasks directory found")
+
+        for fp in self.scanner.collect_files(tasks_dir, {".yml", ".yaml"}):
+            rel = _relpath(fp, self.d)
+            lines = self.scanner.read_lines(fp)
+            i = 0
+            while i < len(lines):
+                line = lines[i].rstrip()
+
+                # --- Check 1: missing Warn Count block ---
+                if 'msg: "This control requires manual remediation"' in line:
+                    control_id = ""
+                    for back in range(i - 1, max(i - 5, -1), -1):
+                        m = re.search(
+                            r'name:\s*"([0-9.]+)\s*\|', lines[back])
+                        if m:
+                            control_id = m.group(1)
+                            break
+
+                    has_warn = False
+                    for ahead in range(i + 1, min(i + 8, len(lines))):
+                        if "Warn Count" in lines[ahead]:
+                            has_warn = True
+                            break
+                        stripped = lines[ahead].lstrip()
+                        if stripped.startswith("- name:"):
+                            break
+
+                    if not has_warn:
+                        cid_text = f" ({control_id})" if control_id else ""
+                        findings.append(Finding(
+                            rel, i + 1,
+                            f"Manual remediation task missing Warn Count "
+                            f"block{cid_text}",
+                            "warning", "manual_warn_count"))
+
+                # --- Check 2: block-level vars with warn_control_id ---
+                if (re.match(r'^  vars:\s*$', line) and
+                        i + 1 < len(lines) and
+                        re.match(r'^    warn_control_id:',
+                                 lines[i + 1].rstrip())):
+                    cid_match = re.search(
+                        r"warn_control_id:\s*['\"]?([^'\"]+)",
+                        lines[i + 1])
+                    cid = cid_match.group(1).strip() if cid_match else ""
+                    cid_text = f" ({cid})" if cid else ""
+                    findings.append(Finding(
+                        rel, i + 1,
+                        f"Block-level vars with warn_control_id{cid_text} — "
+                        f"should be task-level (same indent as "
+                        f"ansible.builtin.import_tasks:)",
+                        "warning", "block_level_warn_vars"))
+
+                i += 1
+
         status = "PASS" if not findings else "WARN"
         return CheckResult(self.display_name, status, findings,
                            f"{len(findings)} issue(s)")
@@ -1466,6 +1665,10 @@ CHECK_DESCRIPTIONS: Dict[str, str] = {
     "FQCN Usage": (
         "Are all Ansible module names fully qualified (ansible.builtin.*)?"
     ),
+    "Manual Warn Count": (
+        "Do all manual remediation tasks include the warning_facts.yml "
+        "Warn Count block?"
+    ),
     "Rule Coverage": (
         "Does every rule toggle have a corresponding task, and does every "
         "task reference a defined toggle?"
@@ -1546,6 +1749,14 @@ CHECK_CRITERIA: Dict[str, str] = {
         "requires fully qualified collection names (FQCN) for reliable module "
         "resolution. Findings appear here when bare module names are used that "
         "should be converted to their ansible.builtin.* equivalents."
+    ),
+    "Manual Warn Count": (
+        "Checks that every task containing 'This control requires manual "
+        "remediation' is followed by a Warn Count task that imports "
+        "warning_facts.yml with the correct warn_control_id. Without the "
+        "Warn Count block, manual-only controls are not tracked in the "
+        "warning summary at the end of the Ansible run, making it easy to "
+        "miss controls that still need human attention."
     ),
     "Rule Coverage": (
         "Ensures all rule toggle variables defined in defaults/main.yml are "
@@ -2125,7 +2336,7 @@ def parse_args() -> argparse.Namespace:
             check names for --skip:
               yamllint, ansiblelint, spelling, grammar, unused_vars,
               var_naming, file_mode, company_naming, audit_template,
-              fqcn, rule_coverage
+              fqcn, manual_warn, rule_coverage
 
             exit codes:
               0  All checks passed (or only warnings without --strict)

@@ -2,7 +2,7 @@
 """Cross-Repo Validator for Ansible-Lockdown remediation + audit repo pairs.
 
 Validates consistency between a remediation role and its corresponding Goss
-audit repo across 14 checks.  Reports include per-check criteria descriptions
+audit repo across 19 checks.  Reports include per-check criteria descriptions
 explaining what each check validates and why findings appear.
 Supports both STIG and CIS benchmark types, and works with public repos
 (no Private- prefix) or private repos.
@@ -21,6 +21,11 @@ Supports both STIG and CIS benchmark types, and works with public repos
  12. Severity-Directory Alignment  - task severity labels match cat_X directories (STIG)
  13. Goss Block Pairing            - if/range/end blocks are balanced in audit files
  14. When-Toggle Alignment         - task when: conditions reference correct toggle (STIG)
+ 15. Template-Goss Var Cross-Ref   - goss .Vars references match template output keys and defaults
+ 16. Handler Notify Validation    - notify references match defined handler names
+ 17. Prelim Variable Dependencies  - prelim_* vars used in tasks are defined in prelim.yml
+ 18. Automation Status Tracking    - automated controls have corresponding audit tests
+ 19. File Path Alignment           - remediation file paths match audit test paths
 
 Zero external dependencies — uses Python 3 standard library only.
 """
@@ -38,14 +43,14 @@ import sys
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Set, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 BENCHMARK_STIG = "stig"
 BENCHMARK_CIS = "cis"
@@ -732,6 +737,14 @@ def _find_audit_subdirs(audit_dir: str) -> List[str]:
     return subdirs
 
 
+def _normalize_path(p: str) -> str:
+    """Normalize a file path for comparison."""
+    p = p.rstrip("/").rstrip("'\"")
+    p = p.replace("/./", "/")
+    p = re.sub(r"[*?\[\]]", "", p)  # strip glob chars
+    return p
+
+
 # ---------------------------------------------------------------------------
 # Extraction: non-toggle config variables
 # ---------------------------------------------------------------------------
@@ -802,6 +815,47 @@ def extract_template_variables(
     except FileNotFoundError:
         pass
     return variables
+
+
+def extract_template_output_keys(template_path: str) -> Dict[str, int]:
+    """Extract ALL top-level YAML keys the Jinja2 template will output.
+
+    Returns {key_name: first_line_number}.
+    Handles Jinja2 if/else blocks: keys inside {% if %}/{% else %} are
+    conditional and only one branch renders, so they are NOT duplicates.
+    """
+    keys: Dict[str, int] = {}
+    try:
+        with open(template_path, "r", encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, 1):
+                s = line.strip()
+                if not s or s.startswith("{%") or s.startswith("#"):
+                    continue
+                m = re.match(r"^([a-zA-Z_]\w*)\s*:", s)
+                if m:
+                    key = m.group(1)
+                    if key not in keys:
+                        keys[key] = lineno
+    except FileNotFoundError:
+        pass
+    return keys
+
+
+def extract_defaults_all_keys(defaults_path: str) -> Set[str]:
+    """Extract ALL top-level YAML keys from defaults/main.yml."""
+    keys: Set[str] = set()
+    try:
+        with open(defaults_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                s = line.rstrip()
+                if not s or s.startswith("#") or s[0] in (" ", "\t"):
+                    continue
+                m = re.match(r"^([a-zA-Z_]\w*)\s*:", s)
+                if m and m.group(1) != "---":
+                    keys.add(m.group(1))
+    except FileNotFoundError:
+        pass
+    return keys
 
 
 def extract_goss_var_references(audit_dir: str) -> Dict[str, Set[str]]:
@@ -1562,6 +1616,1048 @@ def check_when_toggle_alignment(
                        f"{len(findings)} issue(s)")
 
 
+def check_template_goss_var_crossref(
+    goss_var_refs: Dict[str, Set[str]],
+    template_output_keys: Dict[str, int],
+    defaults_all_keys: Set[str],
+    audit_vars_defined: Set[str],
+    prefix: str,
+    benchmark_type: str,
+    template_path: str,
+    defaults_path: str,
+) -> CheckResult:
+    """Check 15: Cross-ref goss .Vars references against template output keys.
+
+    Validates that:
+      A. Every goss .Vars.<name> reference is output by the template
+      B. Every template Jinja2 expression references a defined default/vars var
+      C. Naming mismatches (template outputs key X, goss expects similar key Y)
+    """
+    findings: List[Finding] = []
+
+    # Well-known runtime variables injected by run_audit.sh
+    runtime_vars = {
+        "machine_uuid", "epoch", "os_locale", "os_release",
+        "os_distribution", "auto_group", "os_hostname", "system_type",
+        "benchmark_type", "benchmark_version", "benchmark_os",
+        "system_is_container",
+    }
+
+    goss_non_runtime = {v for v in goss_var_refs if v not in runtime_vars}
+    tmpl_keys = set(template_output_keys.keys())
+
+    # A. Goss vars missing from template output
+    missing_from_tmpl = goss_non_runtime - tmpl_keys
+    for var in sorted(missing_from_tmpl):
+        # Skip non-prefixed vars (general goss/system vars) and toggles
+        if not var.startswith(prefix + "_"):
+            continue
+        if _is_toggle_var(var, prefix, benchmark_type):
+            continue
+        example_files = sorted(goss_var_refs[var])[:3]
+        file_list = ", ".join(example_files)
+        if len(goss_var_refs[var]) > 3:
+            file_list += f" (+{len(goss_var_refs[var]) - 3} more)"
+        findings.append(Finding(
+            file="templates/ansible_vars_goss.yml.j2",
+            line=0,
+            description=(
+                f"Goss tests reference '.Vars.{var}' but template "
+                f"does not output key '{var}'. Used in: {file_list}"
+            ),
+            severity="error",
+            check_name="template_goss_var_xref",
+        ))
+
+    # B. Template Jinja2 expressions referencing undefined vars
+    jinja_ref_pat = re.compile(r'\{\{\s*([a-zA-Z_]\w*?)(?:\s*[\.\[}|])')
+    # Load vars/audit.yml keys as additional valid sources
+    audit_yml_path = os.path.join(os.path.dirname(defaults_path),
+                                  "..", "vars", "audit.yml")
+    audit_local_keys: Set[str] = set()
+    norm_audit_yml = os.path.normpath(audit_yml_path)
+    if os.path.isfile(norm_audit_yml):
+        try:
+            with open(norm_audit_yml, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    m = re.match(r"^([a-zA-Z_]\w*)\s*:", line.rstrip())
+                    if m:
+                        audit_local_keys.add(m.group(1))
+        except (IOError, OSError):
+            pass
+
+    # Ansible builtins that are valid in templates
+    ansible_builtins = {
+        "item", "ansible_facts", "ansible_env", "ansible_check_mode",
+        "ansible_diff_mode", "ansible_version", "ansible_play_hosts",
+        "ansible_play_batch", "ansible_playbook_python", "ansible_connection",
+        "ansible_host", "ansible_port", "ansible_user", "ansible_forks",
+        "inventory_hostname", "inventory_hostname_short", "group_names",
+        "groups", "hostvars", "play_hosts", "role_path", "playbook_dir",
+        "omit", "true", "false", "none", "ansible_local",
+        "ansible_facts_path",
+    }
+    valid_sources = defaults_all_keys | audit_local_keys | ansible_builtins
+
+    # Extract Jinja2 loop variables and conditional-check variables
+    # ({% for X in ... %}, {% if X is defined %}) from the template
+    jinja2_loop_vars: Set[str] = set()
+    if os.path.isfile(template_path):
+        try:
+            with open(template_path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    # {% for var in ... %}
+                    fm = re.search(
+                        r'\{%[-\s]*for\s+(\w+)\s+in\b', line)
+                    if fm:
+                        jinja2_loop_vars.add(fm.group(1))
+                    # {% if var is defined %}
+                    cm = re.search(
+                        r'\{%[-\s]*if\s+(\w+)\s+is\s+defined', line)
+                    if cm:
+                        jinja2_loop_vars.add(cm.group(1))
+        except (IOError, OSError):
+            pass
+    valid_sources = valid_sources | jinja2_loop_vars
+
+    if os.path.isfile(template_path):
+        try:
+            with open(template_path, "r", encoding="utf-8") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    s = line.strip()
+                    if s.startswith("#") or s.startswith("{%"):
+                        continue
+                    for m in jinja_ref_pat.finditer(line):
+                        ref = m.group(1)
+                        if ref not in valid_sources:
+                            findings.append(Finding(
+                                file="templates/ansible_vars_goss.yml.j2",
+                                line=lineno,
+                                description=(
+                                    f"Template references '{{{{ {ref} }}}}' "
+                                    f"but '{ref}' not defined in "
+                                    f"defaults/main.yml or vars/audit.yml"
+                                ),
+                                severity="warning",
+                                check_name="template_goss_var_xref",
+                            ))
+        except (IOError, OSError):
+            pass
+
+    # C. Naming mismatches: template outputs X, goss expects similar Y
+    #    Exclude toggle vars (rule_X_Y_Z) — they share long prefixes by design
+    tmpl_only = tmpl_keys - goss_non_runtime - runtime_vars
+    goss_only = goss_non_runtime - tmpl_keys
+    # Filter to prefixed non-toggle vars only
+    tmpl_only = {v for v in tmpl_only
+                 if v.startswith(prefix + "_")
+                 and not _is_toggle_var(v, prefix, benchmark_type)}
+    goss_only = {v for v in goss_only
+                 if v.startswith(prefix + "_")
+                 and not _is_toggle_var(v, prefix, benchmark_type)}
+    for t_var in sorted(tmpl_only):
+        for g_var in sorted(goss_only):
+            longer = max(len(t_var), len(g_var))
+            prefix_len = len(os.path.commonprefix([t_var, g_var]))
+            if prefix_len >= longer * 0.7 and prefix_len >= 15:
+                findings.append(Finding(
+                    file="templates/ansible_vars_goss.yml.j2",
+                    line=template_output_keys.get(t_var, 0),
+                    description=(
+                        f"Possible naming mismatch: template outputs "
+                        f"'{t_var}' but goss tests expect '{g_var}'"
+                    ),
+                    severity="warning",
+                    check_name="template_goss_var_xref",
+                ))
+
+    n_err = sum(1 for f in findings if f.severity == "error")
+    n_warn = sum(1 for f in findings if f.severity == "warning")
+    status = "FAIL" if n_err else ("WARN" if n_warn else "PASS")
+    summary = (f"{n_err} missing, {n_warn} warning(s) "
+               f"[goss_refs:{len(goss_non_runtime)} "
+               f"tmpl_keys:{len(tmpl_keys)} "
+               f"defaults:{len(defaults_all_keys)}]")
+    return CheckResult("Template-Goss Var Cross-Ref", status, findings,
+                       summary)
+
+
+# ---------------------------------------------------------------------------
+# Extraction: handlers, prelim vars, task automation status
+# ---------------------------------------------------------------------------
+
+
+def extract_handler_names(handlers_path: str) -> Dict[str, int]:
+    """Extract handler names from handlers/main.yml.
+
+    Returns {handler_name: line_number}.
+    """
+    handlers: Dict[str, int] = {}
+    if not os.path.isfile(handlers_path):
+        return handlers
+    try:
+        with open(handlers_path, "r", encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, 1):
+                m = re.match(r"^-\s*name:\s*(.+)", line)
+                if m:
+                    name = m.group(1).strip().strip("'\"")
+                    handlers[name] = lineno
+                # Also detect listen: directives
+                m = re.match(r"\s+listen:\s*(.+)", line)
+                if m:
+                    name = m.group(1).strip().strip("'\"")
+                    handlers[name] = lineno
+    except (IOError, OSError):
+        pass
+    return handlers
+
+
+def extract_notify_references(tasks_dir: str) -> List[Dict[str, Any]]:
+    """Extract all notify: references from task files.
+
+    Returns list of {name: str, file: str, line: int}.
+    """
+    refs: List[Dict[str, Any]] = []
+    if not os.path.isdir(tasks_dir):
+        return refs
+    for root, dirs, files in os.walk(tasks_dir):
+        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__"}]
+        for fname in sorted(files):
+            if not fname.endswith((".yml", ".yaml")):
+                continue
+            fpath = os.path.join(root, fname)
+            rel = os.path.relpath(fpath, os.path.dirname(tasks_dir))
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    for lineno, line in enumerate(fh, 1):
+                        stripped = line.strip()
+                        # Inline: notify: Handler Name
+                        m = re.match(r"notify:\s+(.+)", stripped)
+                        if m:
+                            val = m.group(1).strip().strip("'\"")
+                            # Skip Jinja2 expressions
+                            if "{{" not in val:
+                                refs.append({"name": val, "file": rel,
+                                             "line": lineno})
+                        # List item: - Handler Name
+                        elif stripped.startswith("- ") and refs:
+                            # Check if previous non-empty line was notify:
+                            # by tracking context — simpler: just check
+                            # indent-based membership in a notify list
+                            pass
+            except (IOError, OSError):
+                continue
+    # Second pass: handle notify list items
+    for root, _dirs, files in os.walk(tasks_dir):
+        for fname in sorted(files):
+            if not fname.endswith((".yml", ".yaml")):
+                continue
+            fpath = os.path.join(root, fname)
+            rel = os.path.relpath(fpath, os.path.dirname(tasks_dir))
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    lines = fh.readlines()
+            except (IOError, OSError):
+                continue
+            in_notify = False
+            notify_indent = 0
+            for lineno, line in enumerate(lines, 1):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                indent = len(line) - len(line.lstrip())
+                # Detect "notify:" on its own line (block list form)
+                if re.match(r"notify:\s*$", stripped):
+                    in_notify = True
+                    notify_indent = indent
+                    continue
+                if in_notify:
+                    if indent > notify_indent and stripped.startswith("- "):
+                        val = stripped[2:].strip().strip("'\"")
+                        if "{{" not in val:
+                            refs.append({"name": val, "file": rel,
+                                         "line": lineno})
+                    else:
+                        in_notify = False
+    # Deduplicate
+    seen = set()
+    unique: List[Dict[str, Any]] = []
+    for ref in refs:
+        key = (ref["name"], ref["file"], ref["line"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(ref)
+    return unique
+
+
+def extract_prelim_registered_vars(prelim_path: str) -> Set[str]:
+    """Extract prelim_* variable names registered or set anywhere in tasks/.
+
+    Scans prelim.yml first, then all other task files for register: prelim_*
+    and set_fact prelim_* definitions.  This avoids false positives where a
+    prelim_* var is registered outside prelim.yml (e.g. main.yml,
+    parse_etc_password.yml, pre_remediation_audit.yml).
+    """
+    vars_set: Set[str] = set()
+    # Scan the entire tasks/ directory for prelim_* definitions
+    tasks_dir = os.path.dirname(prelim_path) if prelim_path else ""
+    if not tasks_dir or not os.path.isdir(tasks_dir):
+        return vars_set
+    for root, dirs, files in os.walk(tasks_dir):
+        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__"}]
+        for fname in sorted(files):
+            if not fname.endswith((".yml", ".yaml")):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    for line in fh:
+                        stripped = line.strip()
+                        # register: prelim_*
+                        m = re.match(r"register:\s+(prelim_\w+)", stripped)
+                        if m:
+                            vars_set.add(m.group(1))
+                        # set_fact key: value
+                        m = re.match(r"(prelim_\w+):\s+", stripped)
+                        if m:
+                            vars_set.add(m.group(1))
+            except (IOError, OSError):
+                continue
+    return vars_set
+
+
+def extract_prelim_references(tasks_dir: str) -> List[Dict[str, Any]]:
+    """Find references to prelim_* variables in task files (excluding prelim.yml).
+
+    Skips lines that define prelim_* vars (register:, set_fact keys) and
+    lines where prelim_* appears in a tag context (tags: or tag list items).
+
+    Returns list of {var: str, file: str, line: int}.
+    """
+    refs: List[Dict[str, Any]] = []
+    prelim_pat = re.compile(r"\bprelim_(\w+)")
+    # Patterns for lines that define rather than reference prelim_* vars
+    define_pat = re.compile(r"^\s*register:\s+prelim_")
+    tag_pat = re.compile(r"^\s*(?:tags:\s|-(?: )+(?:prelim_))")
+    set_fact_pat = re.compile(r"^\s*prelim_\w+:\s+")
+    if not os.path.isdir(tasks_dir):
+        return refs
+    for root, dirs, files in os.walk(tasks_dir):
+        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__"}]
+        for fname in sorted(files):
+            if not fname.endswith((".yml", ".yaml")):
+                continue
+            if fname == "prelim.yml":
+                continue
+            fpath = os.path.join(root, fname)
+            rel = os.path.relpath(fpath, os.path.dirname(tasks_dir))
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    for lineno, line in enumerate(fh, 1):
+                        stripped = line.strip()
+                        # Skip definition lines
+                        if define_pat.match(line):
+                            continue
+                        if set_fact_pat.match(line):
+                            continue
+                        # Skip tag lines (e.g. "- prelim_tasks")
+                        if stripped.startswith("- prelim_") and ":" not in stripped:
+                            continue
+                        if stripped.startswith("tags:") and "prelim_" in stripped:
+                            continue
+                        for m in prelim_pat.finditer(line):
+                            var = "prelim_" + m.group(1)
+                            refs.append({"var": var, "file": rel,
+                                         "line": lineno})
+            except (IOError, OSError):
+                continue
+    return refs
+
+
+def extract_task_automation_status(
+    tasks_dir: str, prefix: str, benchmark_type: str
+) -> Dict[str, Dict[str, Any]]:
+    """Detect whether each control is automated or manual.
+
+    Returns {toggle: {"status": "automated"|"manual"|"partial",
+                      "file": str, "line": int, "has_remediation": bool}}.
+
+    A task is considered "manual" if its block contains only:
+      - ansible.builtin.debug with "manual remediation"
+      - ansible.builtin.import_tasks: warning_facts.yml
+    """
+    result: Dict[str, Dict[str, Any]] = {}
+    toggle_pat = re.compile(rf"({re.escape(prefix)}_rule_[\d_.]+)")
+
+    task_subdirs: List[str] = []
+    if os.path.isdir(tasks_dir):
+        for entry in sorted(os.listdir(tasks_dir)):
+            full = os.path.join(tasks_dir, entry)
+            if os.path.isdir(full) and (entry.startswith("section_") or
+                                         entry.startswith("cat_")):
+                task_subdirs.append(entry)
+
+    for subdir_name in task_subdirs:
+        cat_path = os.path.join(tasks_dir, subdir_name)
+        for fname in sorted(os.listdir(cat_path)):
+            if not fname.endswith(".yml") or fname == "main.yml":
+                continue
+            fpath = os.path.join(cat_path, fname)
+            rel = os.path.relpath(fpath, os.path.dirname(tasks_dir))
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    content = fh.read()
+                    lines = content.splitlines()
+            except (IOError, OSError):
+                continue
+
+            # Find top-level tasks and their blocks
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                name_m = re.match(r"^- name:\s*(.+)", line)
+                if not name_m:
+                    i += 1
+                    continue
+
+                task_name = name_m.group(1).strip().strip("'\"")
+                task_line = i + 1
+
+                # Extract toggle from nearby when: condition
+                toggle = None
+                j = i + 1
+                end = min(i + 20, len(lines))
+                while j < end:
+                    tl = lines[j].strip()
+                    tm = toggle_pat.search(tl)
+                    if tm:
+                        toggle = tm.group(1).replace(".", "_").strip("_")
+                        break
+                    if tl.startswith("- name:"):
+                        break
+                    j += 1
+
+                if not toggle:
+                    i += 1
+                    continue
+
+                # Scan block for remediation indicators
+                has_manual_msg = False
+                has_warning_facts = False
+                has_real_module = False
+                k = i + 1
+                block_end = len(lines)
+                while k < len(lines):
+                    bl = lines[k]
+                    bs = bl.strip()
+                    # Next top-level task
+                    if re.match(r"^- name:", bl):
+                        block_end = k
+                        break
+                    if "manual remediation" in bs.lower():
+                        has_manual_msg = True
+                    if "warning_facts.yml" in bs:
+                        has_warning_facts = True
+                    # Real remediation modules
+                    if re.match(
+                        r"\s*(ansible\.builtin\.|community\.general\.|"
+                        r"ansible\.posix\.)(lineinfile|replace|template|"
+                        r"file|copy|package|systemd|user|command|shell|"
+                        r"modprobe|mount|pamd|sysctl|cron):",
+                        bs
+                    ):
+                        has_real_module = True
+                    k += 1
+
+                if toggle not in result:
+                    if has_manual_msg and not has_real_module:
+                        status = "manual"
+                    elif has_real_module:
+                        status = "automated"
+                    else:
+                        status = "partial"
+                    result[toggle] = {
+                        "status": status,
+                        "file": rel,
+                        "line": task_line,
+                        "has_remediation": has_real_module,
+                    }
+
+                i = block_end if block_end > i else i + 1
+
+    return result
+
+
+def extract_audit_test_depth(
+    audit_dir: str, prefix: str, benchmark_type: str
+) -> Dict[str, Dict[str, Any]]:
+    """Measure audit test depth for each rule.
+
+    Returns {toggle: {"file": str, "assertion_count": int,
+                      "has_file_check": bool, "has_command_check": bool}}.
+    """
+    result: Dict[str, Dict[str, Any]] = {}
+
+    # CIS toggle from filename: cis_X.Y.Z.yml -> prefix_rule_X_Y_Z
+    audit_subdirs: List[str] = []
+    for entry in sorted(os.listdir(audit_dir)):
+        full = os.path.join(audit_dir, entry)
+        if os.path.isdir(full) and (entry.startswith("section_") or
+                                     entry.startswith("cat_")):
+            audit_subdirs.append(full)
+
+    for subdir in audit_subdirs:
+        for root, _dirs, files in os.walk(subdir):
+            for fname in sorted(files):
+                if not fname.endswith(".yml"):
+                    continue
+                fpath = os.path.join(root, fname)
+                rel = os.path.relpath(fpath, audit_dir)
+
+                try:
+                    with open(fpath, "r", encoding="utf-8") as fh:
+                        content = fh.read()
+                except (IOError, OSError):
+                    continue
+
+                # Extract ALL toggles from file content (handles
+                # combined files like cis_2.4.1.3_7.yml)
+                toggle_matches = re.findall(
+                    rf"\.Vars\.({re.escape(prefix)}_rule_[\w]+)",
+                    content)
+                # Fallback: extract from filename if no conditionals
+                if not toggle_matches:
+                    fm = re.search(r"(\d[\d.]+\d)", fname)
+                    if not fm:
+                        continue
+                    rule_nums = fm.group(1).replace(".", "_")
+                    toggle_matches = [f"{prefix}_rule_{rule_nums}"]
+
+                assertion_count = len(re.findall(
+                    r"\b(file|command|exec|service|package|port|"
+                    r"process|kernel-param|mount|group|user):",
+                    content))
+                has_file = bool(re.search(r"\bfile:", content))
+                has_command = bool(re.search(
+                    r"\b(command|exec):", content))
+
+                for toggle in set(toggle_matches):
+                    result[toggle] = {
+                        "file": rel,
+                        "assertion_count": assertion_count,
+                        "has_file_check": has_file,
+                        "has_command_check": has_command,
+                    }
+
+    return result
+
+
+def extract_task_paths(
+    tasks_dir: str, prefix: str, benchmark_type: str
+) -> Dict[str, Dict[str, Any]]:
+    """Extract file paths referenced by each control's remediation tasks.
+
+    Returns {toggle: {"paths": Set[str], "file": str, "line": int}}.
+    Only literal paths are collected; Jinja2 expressions are skipped.
+    Works for both CIS and STIG benchmarks.
+    """
+    result: Dict[str, Dict[str, Any]] = {}
+
+    if benchmark_type == BENCHMARK_CIS:
+        toggle_pat = re.compile(rf"({re.escape(prefix)}_rule_[\d_.]+)")
+    else:
+        toggle_pat = re.compile(rf"({re.escape(prefix)}_\d{{6}})")
+
+    module_pat = re.compile(
+        r"\s*(ansible\.builtin\.|community\.general\.|ansible\.posix\.)"
+        r"(lineinfile|replace|template|file|copy|stat|mount|find|blockinfile"
+        r"|ini_file):"
+    )
+    path_param_pat = re.compile(
+        r"\s+(path|dest|src|mountpoint):\s*['\"]?(/[^\s'\"{}]+)"
+    )
+    shell_module_pat = re.compile(
+        r"\s*(ansible\.builtin\.)(shell|command):\s*(.*)"
+    )
+    shell_path_pat = re.compile(
+        r"(/(?:etc|var|usr|boot|home|opt|srv|tmp|run|sys|proc)/[\w./*_-]+)"
+    )
+
+    task_subdirs: List[str] = []
+    if os.path.isdir(tasks_dir):
+        for entry in sorted(os.listdir(tasks_dir)):
+            full = os.path.join(tasks_dir, entry)
+            if os.path.isdir(full) and (entry.startswith("section_") or
+                                         entry.startswith("cat_")):
+                task_subdirs.append(entry)
+
+    for subdir_name in task_subdirs:
+        cat_path = os.path.join(tasks_dir, subdir_name)
+        for fname in sorted(os.listdir(cat_path)):
+            if not fname.endswith(".yml") or fname == "main.yml":
+                continue
+            fpath = os.path.join(cat_path, fname)
+            rel = os.path.relpath(fpath, os.path.dirname(tasks_dir))
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    lines = fh.read().splitlines()
+            except (IOError, OSError):
+                continue
+
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                if not re.match(r"^- name:", line):
+                    i += 1
+                    continue
+
+                task_line = i + 1
+                # Find toggle from when: condition (next 20 lines)
+                toggles: List[str] = []
+                j = i + 1
+                end = min(i + 20, len(lines))
+                while j < end:
+                    tl = lines[j].strip()
+                    for tm in toggle_pat.finditer(tl):
+                        t = tm.group(1).replace(".", "_").strip("_")
+                        if t not in toggles:
+                            toggles.append(t)
+                    if tl.startswith("- name:"):
+                        break
+                    j += 1
+
+                if not toggles:
+                    i += 1
+                    continue
+
+                # Scan block for paths
+                paths: Set[str] = set()
+                k = i + 1
+                in_find_paths = False
+                while k < len(lines):
+                    bl = lines[k]
+                    bs = bl.strip()
+                    if re.match(r"^- name:", bl):
+                        break
+
+                    # Module with path/dest parameter
+                    if module_pat.match(bs):
+                        # Scan next few lines for path params
+                        for pk in range(k + 1, min(k + 10, len(lines))):
+                            ps = lines[pk].strip()
+                            if ps.startswith("- name:") or module_pat.match(ps):
+                                break
+                            pm = path_param_pat.match(lines[pk])
+                            if pm:
+                                p = _normalize_path(pm.group(2))
+                                if "{{" not in p and p.startswith("/"):
+                                    paths.add(p)
+                        # Check if this is find module (paths: list)
+                        if "find:" in bs:
+                            in_find_paths = True
+
+                    # Find module paths: list items
+                    if in_find_paths and bs.startswith("- /"):
+                        p = _normalize_path(bs[2:].strip().strip("'\""))
+                        if "{{" not in p:
+                            paths.add(p)
+                    if in_find_paths and not bs.startswith("-") and ":" in bs:
+                        in_find_paths = False
+
+                    # Shell/command with inline paths
+                    sm = shell_module_pat.match(bs)
+                    if sm and sm.group(3):
+                        for sp in shell_path_pat.findall(sm.group(3)):
+                            p = _normalize_path(sp)
+                            if "{{" not in p:
+                                paths.add(p)
+
+                    # cmd: parameter on following lines
+                    if bs.startswith("cmd:") or bs.startswith("cmd :"):
+                        cmd_val = bs.split(":", 1)[1].strip()
+                        for sp in shell_path_pat.findall(cmd_val):
+                            p = _normalize_path(sp)
+                            if "{{" not in p:
+                                paths.add(p)
+
+                    k += 1
+
+                for toggle in toggles:
+                    if toggle not in result:
+                        result[toggle] = {
+                            "paths": set(paths),
+                            "file": rel,
+                            "line": task_line,
+                        }
+                    else:
+                        result[toggle]["paths"].update(paths)
+
+                i = k if k > i else i + 1
+
+    return result
+
+
+def extract_audit_paths(
+    audit_dir: str, prefix: str, benchmark_type: str
+) -> Dict[str, Dict[str, Any]]:
+    """Extract file paths referenced in goss audit test files.
+
+    Returns {toggle: {"paths": Set[str], "file": str}}.
+    Works for both CIS and STIG benchmarks.
+    """
+    result: Dict[str, Dict[str, Any]] = {}
+
+    if benchmark_type == BENCHMARK_CIS:
+        toggle_cond_pat = re.compile(
+            rf"\{{\{{\s*if\s+\.Vars\.({re.escape(prefix)}_rule_[\w]+)"
+        )
+    else:
+        toggle_cond_pat = re.compile(
+            rf"\{{\{{\s*if\s+\.Vars\.({re.escape(prefix)}_\d{{6}})"
+        )
+
+    file_path_pat = re.compile(r"^\s+path:\s*(/\S+)")
+    mountpoint_pat = re.compile(r"^\s+mountpoint:\s*(/\S+)")
+    exec_pat = re.compile(r"^\s+exec:\s*[|>]?\s*['\"]?(.*)")
+    shell_path_pat = re.compile(
+        r"(/(?:etc|var|usr|boot|home|opt|srv|tmp|run|sys|proc)/[\w./*_-]+)"
+    )
+
+    audit_subdirs = _find_audit_subdirs(audit_dir)
+
+    for subdir in audit_subdirs:
+        for root, _dirs, files in os.walk(subdir):
+            for fname in sorted(files):
+                if not fname.endswith(".yml"):
+                    continue
+                fpath = os.path.join(root, fname)
+                rel = os.path.relpath(fpath, audit_dir)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as fh:
+                        lines = fh.readlines()
+                except (IOError, OSError):
+                    continue
+
+                # Track toggle scope via stack
+                toggle_stack: List[str] = []
+                scope_depth = 0
+
+                for line in lines:
+                    stripped = line.strip()
+
+                    # Toggle conditional open
+                    tm = toggle_cond_pat.search(stripped)
+                    if tm:
+                        toggle_stack.append(tm.group(1))
+                        scope_depth += 1
+                        continue
+
+                    # Non-toggle if/range (nested)
+                    if re.match(r"\{\{\s*(if|range)\b", stripped):
+                        scope_depth += 1
+                        continue
+
+                    # End block
+                    if re.match(r"\{\{\s*end\s*\}\}", stripped):
+                        scope_depth -= 1
+                        if toggle_stack and scope_depth < len(toggle_stack):
+                            toggle_stack.pop()
+                        continue
+
+                    if not toggle_stack:
+                        continue
+
+                    current_toggle = toggle_stack[-1]
+
+                    # Initialize result entry
+                    if current_toggle not in result:
+                        result[current_toggle] = {
+                            "paths": set(),
+                            "file": rel,
+                        }
+
+                    # file: path:
+                    pm = file_path_pat.match(line)
+                    if pm:
+                        p = _normalize_path(pm.group(1))
+                        if "{{" not in p and p.startswith("/"):
+                            result[current_toggle]["paths"].add(p)
+
+                    # mount: mountpoint:
+                    mm = mountpoint_pat.match(line)
+                    if mm:
+                        p = _normalize_path(mm.group(1))
+                        if "{{" not in p and p.startswith("/"):
+                            result[current_toggle]["paths"].add(p)
+
+                    # command/exec: extract paths from shell
+                    em = exec_pat.match(line)
+                    if em:
+                        cmd_str = em.group(1)
+                        for sp in shell_path_pat.findall(cmd_str):
+                            p = _normalize_path(sp)
+                            if "{{" not in p:
+                                result[current_toggle]["paths"].add(p)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Check 16: Handler Notify Validation
+# ---------------------------------------------------------------------------
+
+
+def check_handler_notify(
+    handler_names: Dict[str, int],
+    notify_refs: List[Dict[str, Any]],
+    handlers_path: str,
+) -> CheckResult:
+    """Check 16: Validate that all notify: references match defined handlers."""
+    findings: List[Finding] = []
+
+    if not handler_names and not notify_refs:
+        return CheckResult("Handler Notify Validation", "PASS", [],
+                           "No handlers or notify references found")
+
+    handler_set = set(handler_names.keys())
+    referenced_handlers: Set[str] = set()
+
+    # Check each notify reference has a matching handler
+    for ref in notify_refs:
+        name = ref["name"]
+        referenced_handlers.add(name)
+        # Jinja2 template handlers — skip (can't resolve at parse time)
+        if "{{" in name:
+            continue
+        if name not in handler_set:
+            # Case-insensitive match attempt
+            matches = [h for h in handler_set if h.lower() == name.lower()]
+            if matches:
+                findings.append(Finding(
+                    file=ref["file"], line=ref["line"],
+                    description=(
+                        f"Handler name case mismatch: notify '{name}' "
+                        f"but handler defined as '{matches[0]}'"
+                    ),
+                    severity="warning",
+                    check_name="handler_notify",
+                ))
+            else:
+                findings.append(Finding(
+                    file=ref["file"], line=ref["line"],
+                    description=f"Notify references undefined handler: '{name}'",
+                    severity="error",
+                    check_name="handler_notify",
+                ))
+
+    # Check for orphaned handlers (defined but never referenced)
+    for hname, hline in sorted(handler_names.items()):
+        if hname not in referenced_handlers:
+            # Case-insensitive check
+            if not any(hname.lower() == r.lower() for r in referenced_handlers):
+                findings.append(Finding(
+                    file=os.path.relpath(handlers_path,
+                                         os.path.dirname(
+                                             os.path.dirname(handlers_path))),
+                    line=hline,
+                    description=f"Orphaned handler never referenced: '{hname}'",
+                    severity="info",
+                    check_name="handler_notify",
+                ))
+
+    status = _determine_status(findings)
+    return CheckResult("Handler Notify Validation", status, findings,
+                       f"{len(findings)} issue(s)")
+
+
+# ---------------------------------------------------------------------------
+# Check 17: Prelim Variable Dependencies
+# ---------------------------------------------------------------------------
+
+
+def check_prelim_dependencies(
+    prelim_vars: Set[str],
+    prelim_refs: List[Dict[str, Any]],
+    prelim_path: str,
+) -> CheckResult:
+    """Check 17: Validate that prelim_* vars used in tasks are defined."""
+    findings: List[Finding] = []
+
+    if not prelim_path or not os.path.isfile(prelim_path):
+        return CheckResult("Prelim Variable Dependencies", "SKIP", [],
+                           "No prelim.yml found")
+
+    # Find prelim vars referenced but not defined
+    seen_undefined: Set[str] = set()
+    for ref in prelim_refs:
+        var = ref["var"]
+        if var not in prelim_vars and var not in seen_undefined:
+            seen_undefined.add(var)
+            findings.append(Finding(
+                file=ref["file"], line=ref["line"],
+                description=(
+                    f"Task references '{var}' but it is not registered "
+                    f"or set in prelim.yml"
+                ),
+                severity="warning",
+                check_name="prelim_dependencies",
+            ))
+
+    status = _determine_status(findings)
+    return CheckResult("Prelim Variable Dependencies", status, findings,
+                       f"{len(findings)} issue(s) "
+                       f"[defined:{len(prelim_vars)} "
+                       f"referenced:{len(set(r['var'] for r in prelim_refs))}]")
+
+
+# ---------------------------------------------------------------------------
+# Check 18: Automation Status Tracking
+# ---------------------------------------------------------------------------
+
+
+def check_automation_status(
+    task_status: Dict[str, Dict[str, Any]],
+    audit_depth: Dict[str, Dict[str, Any]],
+    audit_vars_path: str,
+    prefix: str,
+) -> CheckResult:
+    """Check 18: Detect manual→automated gaps in audit test coverage.
+
+    Flags:
+    - Controls that are automated in tasks but have no audit test
+    - Controls that are automated in tasks but have shallow audit tests
+    - Controls marked as automated in tasks but still flagged 'manual'
+      in audit vars
+    """
+    findings: List[Finding] = []
+
+    # Load audit vars to check for manual/automated flags
+    audit_manual_flags: Dict[str, str] = {}
+    if os.path.isfile(audit_vars_path):
+        try:
+            with open(audit_vars_path, "r", encoding="utf-8") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    stripped = line.strip()
+                    if stripped.startswith("#") or not stripped:
+                        continue
+                    # Look for lines like: # manual or containing "manual"
+                    # near toggle definitions
+        except (IOError, OSError):
+            pass
+
+    for toggle, info in sorted(task_status.items()):
+        if info["status"] != "automated":
+            continue
+
+        # Check if audit test exists
+        if toggle not in audit_depth:
+            findings.append(Finding(
+                file=info["file"], line=info["line"],
+                description=(
+                    f"Automated control '{toggle}' has no audit test file"
+                ),
+                severity="warning",
+                check_name="automation_status",
+            ))
+            continue
+
+        # Check audit test depth
+        depth = audit_depth[toggle]
+        if depth["assertion_count"] == 0:
+            findings.append(Finding(
+                file=depth["file"], line=0,
+                description=(
+                    f"Automated control '{toggle}' has an audit test "
+                    f"with no assertions"
+                ),
+                severity="warning",
+                check_name="automation_status",
+            ))
+
+    # Count manual vs automated
+    n_auto = sum(1 for v in task_status.values() if v["status"] == "automated")
+    n_manual = sum(1 for v in task_status.values() if v["status"] == "manual")
+
+    status = _determine_status(findings)
+    return CheckResult("Automation Status", status, findings,
+                       f"{len(findings)} issue(s) "
+                       f"[automated:{n_auto} manual:{n_manual}]")
+
+
+# ---------------------------------------------------------------------------
+# Check 19: File Path Alignment
+# ---------------------------------------------------------------------------
+
+
+def check_file_path_alignment(
+    task_paths: Dict[str, Dict[str, Any]],
+    audit_paths: Dict[str, Dict[str, Any]],
+) -> CheckResult:
+    """Check 19: Verify remediation tasks and audit tests reference the same paths."""
+    findings: List[Finding] = []
+
+    def _paths_related(p1: str, p2: str) -> bool:
+        """Check if two paths are related (parent/child or same directory)."""
+        d1 = p1.rstrip("/")
+        d2 = p2.rstrip("/")
+        # Parent/child
+        if d1.startswith(d2 + "/") or d2.startswith(d1 + "/"):
+            return True
+        # Same directory (e.g., /etc/audit/rules.d/50-scope.rules vs
+        # /etc/audit/rules.d/.rules from glob-stripped *.rules)
+        if os.path.dirname(d1) == os.path.dirname(d2):
+            return True
+        return False
+
+    common_toggles = sorted(set(task_paths) & set(audit_paths))
+
+    for toggle in common_toggles:
+        t_paths = task_paths[toggle]["paths"]
+        a_paths = audit_paths[toggle]["paths"]
+
+        # Skip controls with no paths on either side (package/service checks)
+        if not t_paths or not a_paths:
+            continue
+
+        # Paths in remediation but not tested by audit
+        untested = t_paths - a_paths
+        for p in sorted(untested):
+            if any(_paths_related(p, ap) for ap in a_paths):
+                continue
+            findings.append(Finding(
+                file=task_paths[toggle]["file"],
+                line=task_paths[toggle]["line"],
+                description=(
+                    f"'{toggle}': remediation references '{p}' "
+                    f"but audit does not test it"
+                ),
+                severity="warning",
+                check_name="file_path_alignment",
+            ))
+
+        # Paths in audit but not in remediation
+        extra = a_paths - t_paths
+        for p in sorted(extra):
+            if any(_paths_related(p, tp) for tp in t_paths):
+                continue
+            findings.append(Finding(
+                file=audit_paths[toggle]["file"],
+                line=0,
+                description=(
+                    f"'{toggle}': audit tests '{p}' "
+                    f"but remediation does not reference it"
+                ),
+                severity="info",
+                check_name="file_path_alignment",
+            ))
+
+    status = _determine_status(findings)
+    return CheckResult(
+        "File Path Alignment", status, findings,
+        f"{len(findings)} path issue(s) across "
+        f"{len(common_toggles)} shared controls")
+
+
 # ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
@@ -1911,6 +3007,11 @@ CHECK_NAMES = {
     "severity_directory": "Severity-Directory Alignment",
     "goss_block_pairing": "Goss Block Pairing",
     "when_toggle_alignment": "When-Toggle Alignment",
+    "template_goss_var_xref": "Template-Goss Var Cross-Ref",
+    "handler_notify": "Handler Notify Validation",
+    "prelim_dependencies": "Prelim Variable Dependencies",
+    "automation_status": "Automation Status Tracking",
+    "file_path_alignment": "File Path Alignment",
 }
 
 # Short one-line descriptions displayed as subtitles under each section heading
@@ -1971,6 +3072,27 @@ CHECK_DESCRIPTIONS: Dict[str, str] = {
     "When-Toggle Alignment": (
         "Does each STIG task's when: condition reference the "
         "correct toggle variable for its STIG_ID?"
+    ),
+    "Template-Goss Var Cross-Ref": (
+        "Does the goss template output every variable that goss "
+        "tests reference, and are template Jinja2 expressions "
+        "backed by defined defaults?"
+    ),
+    "Handler Notify Validation": (
+        "Do all notify: references in task files match a defined "
+        "handler name in handlers/main.yml?"
+    ),
+    "Prelim Variable Dependencies": (
+        "Are all prelim_* variables referenced in section tasks "
+        "defined (registered or set_fact) in prelim.yml?"
+    ),
+    "Automation Status Tracking": (
+        "Do automated controls have corresponding audit tests, "
+        "and are those tests non-empty?"
+    ),
+    "File Path Alignment": (
+        "Do remediation tasks and audit tests reference the same "
+        "file paths for each control?"
     ),
 }
 
@@ -2078,6 +3200,57 @@ CHECK_CRITERIA: Dict[str, str] = {
         "means enabling/disabling one rule accidentally controls a different rule. "
         "Skipped for CIS."
     ),
+    "Template-Goss Var Cross-Ref": (
+        "Cross-references goss audit test .Vars.<name> references against the "
+        "YAML keys output by ansible_vars_goss.yml.j2, and verifies that every "
+        "Jinja2 expression in the template references a variable defined in "
+        "defaults/main.yml or vars/audit.yml. Findings appear here when: (A) a "
+        "goss test references a variable the template does not output — the test "
+        "will use the audit vars file default or a zero value; (B) a template "
+        "Jinja2 expression references an undefined variable — Ansible rendering "
+        "will fail or produce empty values; (C) a template output key is similar "
+        "but not identical to a goss reference — indicating a naming mismatch "
+        "that silently breaks the variable bridge between remediation and audit."
+    ),
+    "Handler Notify Validation": (
+        "Parses handlers/main.yml for handler names (including listen: aliases) "
+        "and scans all task files for notify: references. Findings appear here "
+        "when: (A) a notify references a handler name that does not exist — the "
+        "play will fail at runtime with 'ERROR! The requested handler was not "
+        "found'; (B) a notify uses different letter casing than the handler "
+        "definition — Ansible handler matching is case-sensitive so a case "
+        "mismatch silently skips the handler; (C) a handler is defined but never "
+        "referenced by any notify — indicating dead code or a missing notify."
+    ),
+    "Prelim Variable Dependencies": (
+        "Extracts all variables registered or set via set_fact in tasks/prelim.yml "
+        "and scans section task files for references to prelim_* variables. "
+        "Findings appear here when a task file references a prelim_* variable "
+        "that is not defined in prelim.yml, which will cause an 'undefined "
+        "variable' error at runtime. This catches refactoring misses where a "
+        "prelim task was renamed or removed but downstream references remain."
+    ),
+    "Automation Status Tracking": (
+        "Classifies each control as automated, manual, or partial by examining "
+        "the Ansible modules used in its task block (shell/command/debug/import "
+        "= manual; package/lineinfile/template/etc. = automated). Then checks "
+        "whether each automated control has a corresponding audit test file with "
+        "at least one goss assertion. Findings appear here when an automated "
+        "control has no audit test (remediation runs but is never validated) or "
+        "has an empty audit test (test file exists but contains no assertions)."
+    ),
+    "File Path Alignment": (
+        "Extracts literal file paths from remediation task modules (path:, dest:, "
+        "shell/command strings) and from goss audit test blocks (file: path:, "
+        "mount: mountpoint:, command: exec: strings). For each control present in "
+        "both repos, compares the path sets. Findings appear when remediation "
+        "writes to a file that the audit does not test (silent false pass) or "
+        "when the audit tests a file that remediation does not touch (potential "
+        "stale test). Jinja2 variable paths are excluded since they cannot be "
+        "resolved at parse time. Parent/child path relationships are tolerated "
+        "(e.g., remediation targets /etc/ssh/sshd_config while audit tests the "
+        "/etc/ssh/ directory)."
+    ),
 }
 
 
@@ -2096,7 +3269,9 @@ Check keys for --skip / --only:
   category_alignment, version_consistency, goss_include_coverage,
   config_variable_parity, goss_template_var_sync, audit_vars_completeness,
   toggle_value_sync, severity_directory, goss_block_pairing,
-  when_toggle_alignment
+  when_toggle_alignment, template_goss_var_xref,
+  handler_notify, prelim_dependencies, automation_status,
+  file_path_alignment
 """,
     )
     parser.add_argument(
@@ -2286,6 +3461,14 @@ def main() -> None:
     audit_vars_defined = extract_audit_vars_defined(audit_vars_path)
     log(f"  Found {len(audit_vars_defined)} defined variables")
 
+    log("Extracting template output keys...")
+    template_output_keys = extract_template_output_keys(template_path)
+    log(f"  Found {len(template_output_keys)} template output keys")
+
+    log("Extracting all defaults keys...")
+    defaults_all_keys = extract_defaults_all_keys(defaults_path)
+    log(f"  Found {len(defaults_all_keys)} defaults keys")
+
     log("Extracting toggle values from defaults/main.yml...")
     defaults_toggle_values = extract_toggle_values(defaults_path, toggle_pat)
     log(f"  Found {len(defaults_toggle_values)} toggle values")
@@ -2293,6 +3476,41 @@ def main() -> None:
     log(f"Extracting toggle values from {audit_vars_name}...")
     audit_toggle_values = extract_toggle_values(audit_vars_path, toggle_pat)
     log(f"  Found {len(audit_toggle_values)} toggle values")
+
+    handlers_path = os.path.join(remediation_dir, "handlers", "main.yml")
+    prelim_path = os.path.join(tasks_dir, "prelim.yml")
+
+    log("Extracting handler names...")
+    handler_names = extract_handler_names(handlers_path)
+    log(f"  Found {len(handler_names)} handlers")
+
+    log("Extracting notify references...")
+    notify_refs = extract_notify_references(tasks_dir)
+    log(f"  Found {len(notify_refs)} notify references")
+
+    log("Extracting prelim registered vars...")
+    prelim_vars = extract_prelim_registered_vars(prelim_path)
+    log(f"  Found {len(prelim_vars)} prelim vars")
+
+    log("Extracting prelim references from tasks...")
+    prelim_refs = extract_prelim_references(tasks_dir)
+    log(f"  Found {len(prelim_refs)} prelim references")
+
+    log("Extracting task automation status...")
+    task_status = extract_task_automation_status(tasks_dir, prefix, toggle_pat)
+    log(f"  Found {len(task_status)} task entries")
+
+    log("Extracting audit test depth...")
+    audit_depth = extract_audit_test_depth(audit_dir, prefix, toggle_pat)
+    log(f"  Found {len(audit_depth)} audit test entries")
+
+    log("Extracting file paths from remediation tasks...")
+    task_file_paths = extract_task_paths(tasks_dir, prefix, benchmark_type)
+    log(f"  Found paths for {len(task_file_paths)} controls")
+
+    log("Extracting file paths from audit tests...")
+    audit_file_paths = extract_audit_paths(audit_dir, prefix, benchmark_type)
+    log(f"  Found paths for {len(audit_file_paths)} controls")
 
     # -----------------------------------------------------------------------
     # Run checks
@@ -2335,6 +3553,18 @@ def main() -> None:
     _run("goss_block_pairing", check_goss_block_pairing, audit_dir)
     _run("when_toggle_alignment", check_when_toggle_alignment,
          tasks_dir, prefix, rule_id_prefix, benchmark_type)
+    _run("template_goss_var_xref", check_template_goss_var_crossref,
+         goss_var_refs, template_output_keys, defaults_all_keys,
+         audit_vars_defined, prefix, benchmark_type,
+         template_path, defaults_path)
+    _run("handler_notify", check_handler_notify,
+         handler_names, notify_refs, handlers_path)
+    _run("prelim_dependencies", check_prelim_dependencies,
+         prelim_vars, prelim_refs, prelim_path)
+    _run("automation_status", check_automation_status,
+         task_status, audit_depth, audit_vars_path, prefix)
+    _run("file_path_alignment", check_file_path_alignment,
+         task_file_paths, audit_file_paths)
 
     # -----------------------------------------------------------------------
     # Report

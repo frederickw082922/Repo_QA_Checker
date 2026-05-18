@@ -2,15 +2,17 @@
 """Find rules defined in defaults/main.yml that have no corresponding task.
 
 Works with any ansible-lockdown benchmark role (CIS, STIG, any OS).
-Auto-detects the benchmark prefix from defaults/main.yml by finding
-the most common *_rule_* variable pattern.
+Auto-detects the benchmark prefix and type from defaults/main.yml.
 
-Supported prefix formats:
-- CIS:  deb11cis, deb12cis, ubuntu2204cis, rhel8cis, rhel9cis, amzn2023cis, etc.
-- STIG: rhel7stig, rhel8stig, rhel9stig, ubuntu2004stig, etc.
+Supported toggle formats:
+- CIS:  {prefix}_rule_{section}  (e.g. ubtu20cis_rule_1_1_1_1)
+- STIG: {prefix}_{6digits}       (e.g. rhel_08_010000, az2023stig_001010)
+
+The prefix is auto-detected by finding the most common pattern among
+top-level variables in defaults/main.yml.
 
 Usage:
-    python check_rule_coverage.py <repo_path> [--prefix PREFIX]
+    python check_rule_coverage.py <repo_path> [--prefix PREFIX] [--type cis|stig]
 """
 
 import argparse
@@ -20,38 +22,67 @@ import sys
 from collections import Counter
 
 
-def detect_prefix(repo_path):
-    """Auto-detect the benchmark prefix from defaults/main.yml.
+def detect_prefix_and_type(repo_path):
+    """Auto-detect the benchmark prefix and type from defaults/main.yml.
 
-    Finds the most common prefix pattern matching *_rule_* variables.
-    Works with any ansible-lockdown naming convention.
+    Returns (prefix, benchmark_type) where:
+    - CIS:  prefix like 'ubtu20cis', type='cis'
+    - STIG: prefix like 'rhel_08', type='stig'
     """
     defaults_file = os.path.join(repo_path, 'defaults', 'main.yml')
     if not os.path.isfile(defaults_file):
-        return None
+        return None, None
 
-    # Match any word characters before _rule_
-    pattern = re.compile(r'^(\w+)_rule_\d', re.MULTILINE)
-    prefixes = Counter()
+    # Try CIS pattern first: {prefix}_rule_\d
+    cis_pattern = re.compile(r'^(\w+)_rule_\d')
+    cis_prefixes = Counter()
+
+    # Try STIG patterns: {prefix}_\d{6}: (bool)
+    # Pattern A: prefix with 2-digit numeric segment (e.g. rhel_08_010000)
+    stig_pattern_a = re.compile(r'^(\w+_\d{2})_(\d{6})\s*:')
+    # Pattern B: prefix ending in "stig" followed by _6digits (e.g. az2023stig_001010)
+    stig_pattern_b = re.compile(r'^(\w*stig)_(\d{6})\s*:', re.IGNORECASE)
+    stig_prefixes = Counter()
 
     with open(defaults_file, 'r', encoding='utf-8') as f:
         for line in f:
-            match = pattern.match(line.strip())
-            if match:
-                prefixes[match.group(1)] += 1
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
 
-    if not prefixes:
-        return None
+            m = cis_pattern.match(stripped)
+            if m:
+                cis_prefixes[m.group(1)] += 1
+                continue
 
-    # Return the most common prefix
-    return prefixes.most_common(1)[0][0]
+            m = stig_pattern_a.match(stripped)
+            if not m:
+                m = stig_pattern_b.match(stripped)
+            if m:
+                stig_prefixes[m.group(1)] += 1
+
+    if cis_prefixes and (not stig_prefixes
+                         or cis_prefixes.most_common(1)[0][1]
+                         >= stig_prefixes.most_common(1)[0][1]):
+        return cis_prefixes.most_common(1)[0][0], 'cis'
+
+    if stig_prefixes:
+        return stig_prefixes.most_common(1)[0][0], 'stig'
+
+    return None, None
 
 
-def find_rule_definitions(repo_path, prefix):
+def find_rule_definitions(repo_path, prefix, benchmark_type):
     """Find all rule toggle variables in defaults/main.yml."""
     defaults_file = os.path.join(repo_path, 'defaults', 'main.yml')
     rules = {}
-    pattern = re.compile(rf'^({re.escape(prefix)}_rule_[\d_]+)\s*:', re.IGNORECASE)
+
+    if benchmark_type == 'stig':
+        pattern = re.compile(
+            rf'^({re.escape(prefix)}_\d{{6}})\s*:', re.IGNORECASE)
+    else:
+        pattern = re.compile(
+            rf'^({re.escape(prefix)}_rule_[\d_]+)\s*:', re.IGNORECASE)
 
     with open(defaults_file, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f, 1):
@@ -92,23 +123,36 @@ def main():
                     'for any ansible-lockdown role')
     parser.add_argument('repo_path', help='Path to the repo root')
     parser.add_argument('--prefix',
-                        help='Benchmark prefix (e.g. rhel9stig, deb12cis). '
+                        help='Rule toggle prefix (e.g. ubtu20cis, rhel_08). '
                              'Auto-detected if omitted.')
+    parser.add_argument('--type', choices=['cis', 'stig'], default=None,
+                        help='Benchmark type. Auto-detected if omitted.')
     args = parser.parse_args()
 
     if not os.path.isdir(args.repo_path):
         print(f"Error: {args.repo_path} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    prefix = args.prefix or detect_prefix(args.repo_path)
+    prefix = args.prefix
+    bm_type = args.type
+
+    if not prefix:
+        prefix, detected_type = detect_prefix_and_type(args.repo_path)
+        if not bm_type:
+            bm_type = detected_type
+
     if not prefix:
         print("Error: Could not detect benchmark prefix. Use --prefix.",
               file=sys.stderr)
         sys.exit(1)
 
-    print(f"Benchmark prefix: {prefix}")
+    if not bm_type:
+        bm_type = 'cis'
 
-    rules = find_rule_definitions(args.repo_path, prefix)
+    print(f"Benchmark prefix: {prefix}")
+    print(f"Benchmark type:   {bm_type}")
+
+    rules = find_rule_definitions(args.repo_path, prefix, bm_type)
     print(f"Rules defined in defaults: {len(rules)}")
 
     tasks_dir = os.path.join(args.repo_path, 'tasks')
