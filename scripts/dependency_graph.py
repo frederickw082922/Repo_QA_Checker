@@ -145,8 +145,12 @@ def find_references(repo_path, variables):
         for num, line in enumerate(lines, 1):
             stripped = line.strip()
 
-            # Skip pure comment lines
-            if stripped.startswith("#"):
+            # Skip pure comment lines. Lines that look like comments but
+            # contain a Jinja2 expression are template content inside a
+            # YAML block scalar (e.g. `file_managed_by_ansible: |-` body
+            # with `# Provided by {{ company_title }}`) — not a YAML
+            # comment. Keep those for reference detection.
+            if stripped.startswith("#") and "{{" not in line:
                 continue
 
             # Skip definition lines (register: var, set_fact key definitions)
