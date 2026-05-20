@@ -4,6 +4,20 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.8.0 - 2026-05-20
+
+### Fixed
+
+- **Cross-Repo Validator: Config Variable Parity (Check 8):** Eliminated false positives caused by static comparison of values where one side is a Jinja2 expression (e.g. `{{ list | join(",") }}` in defaults vs the resolved literal in audit vars). The check now skips equality when either side contains `{{ ... }}` markers. Also relaxed inline-comment stripping in `_strip_yaml_value` to require only single whitespace before `#` (per the YAML spec), so values like `sha512 # pragma: allowlist secret` compare equal to plain `sha512`.
+- **Cross-Repo Validator: Template-Goss Var Cross-Ref (Check 15):** Added support for runtime-set variables. The check now treats variables defined via `register:` or inside `set_fact:` blocks anywhere under `tasks/` as valid Jinja2 reference sources, alongside `defaults/main.yml`, `vars/audit.yml`, and Ansible builtins. The well-known runtime set (`system_is_container`, `os_release`, etc.) injected by `run_audit.sh` is also merged into the valid-sources set. Closes false positives on roles whose templates reference vars set during play execution.
+- **`run_all_checks.sh`:** Per-script pass/warn scoring now uses the script's actual exit code instead of regex-grepping the captured output. The previous regex (`: 0$`) misfired on tails like `Missing from all code: 0`, marking scripts with real warnings as PASS. Each `check_*.py` already exits `0` clean / `1` on issues, so this is a clean swap.
+
+### Added
+
+- **Cross-Repo Validator:** New helper `extract_runtime_defined_vars(tasks_dir)` walks every `*.yml` under `tasks/` to harvest `register:` targets and `set_fact:` block keys. Used by Check 15 (and available to other checks).
+
+---
+
 ## 2.7.0 - 2026-03-31
 
 ### Added

@@ -50,7 +50,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 BENCHMARK_STIG = "stig"
 BENCHMARK_CIS = "cis"
@@ -716,9 +716,12 @@ def _is_toggle_var(var: str, prefix: str, benchmark_type: str) -> bool:
 
 
 def _strip_yaml_value(raw: str) -> str:
-    """Strip inline comments and surrounding quotes from a raw YAML value."""
-    if "  #" in raw:
-        raw = raw[:raw.index("  #")].strip()
+    """Strip inline comments and surrounding quotes from a raw YAML value.
+
+    YAML inline comments require whitespace before '#'; '#' inside a value
+    without leading whitespace (e.g. URL fragment) is preserved.
+    """
+    raw = re.sub(r"\s+#.*$", "", raw).rstrip()
     if len(raw) >= 2 and raw[0] in ("'", '"') and raw[-1] == raw[0]:
         raw = raw[1:-1]
     return raw
@@ -1276,6 +1279,14 @@ def check_config_variable_parity(
         if def_val.startswith("[") or aud_val.startswith("["):
             continue
 
+        # Skip if either side is a Jinja2 expression. Defaults often resolves
+        # at runtime (e.g. '{{ list | join(",") }}' or '{{ x.stat.exists }}')
+        # while the audit side mirrors the resolved literal; static equality
+        # check would produce a false positive.
+        if ("{{" in def_val and "}}" in def_val) or \
+           ("{{" in aud_val and "}}" in aud_val):
+            continue
+
         if def_val != aud_val:
             findings.append(Finding(
                 file=audit_vars_name,
@@ -1720,6 +1731,13 @@ def check_template_goss_var_crossref(
             pass
     valid_sources = valid_sources | jinja2_loop_vars
 
+    # Add play-runtime vars: the well-known set injected by run_audit.sh
+    # plus any variable defined by register: / set_fact: under tasks/.
+    tasks_dir = os.path.normpath(
+        os.path.join(os.path.dirname(defaults_path), "..", "tasks"))
+    runtime_set_vars = extract_runtime_defined_vars(tasks_dir)
+    valid_sources = valid_sources | runtime_vars | runtime_set_vars
+
     if os.path.isfile(template_path):
         try:
             with open(template_path, "r", encoding="utf-8") as fh:
@@ -1888,6 +1906,64 @@ def extract_notify_references(tasks_dir: str) -> List[Dict[str, Any]]:
             seen.add(key)
             unique.append(ref)
     return unique
+
+
+def extract_runtime_defined_vars(tasks_dir: str) -> Set[str]:
+    """Extract variable names defined at play runtime under tasks_dir.
+
+    Walks every task file collecting names from:
+      - `register: <name>` lines
+      - keys inside `set_fact:` blocks (any module-namespaced variant)
+
+    Used as additional valid sources when validating template Jinja2
+    references that point at runtime-set vars like `system_is_container`
+    or `<prefix>_subscribed` (not defined in defaults/main.yml).
+    """
+    vars_set: Set[str] = set()
+    if not tasks_dir or not os.path.isdir(tasks_dir):
+        return vars_set
+
+    set_fact_pat = re.compile(r"^(\s*)(?:ansible\.builtin\.)?set_fact:\s*$")
+    register_pat = re.compile(r"^\s*register:\s+(\w+)\s*$")
+    assign_pat = re.compile(r"^(\s+)([a-zA-Z_]\w*):\s*\S")
+
+    for root, dirs, files in os.walk(tasks_dir):
+        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__"}]
+        for fname in sorted(files):
+            if not fname.endswith((".yml", ".yaml")):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    lines = fh.readlines()
+            except (IOError, OSError):
+                continue
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                rm = register_pat.match(line)
+                if rm:
+                    vars_set.add(rm.group(1))
+                sm = set_fact_pat.match(line)
+                if sm:
+                    sf_indent = len(sm.group(1))
+                    j = i + 1
+                    while j < len(lines):
+                        nxt = lines[j]
+                        if not nxt.strip() or nxt.lstrip().startswith("#"):
+                            j += 1
+                            continue
+                        nxt_indent = len(nxt) - len(nxt.lstrip())
+                        if nxt_indent <= sf_indent:
+                            break
+                        am = assign_pat.match(nxt)
+                        if am and len(am.group(1)) > sf_indent:
+                            vars_set.add(am.group(2))
+                        j += 1
+                    i = j
+                    continue
+                i += 1
+    return vars_set
 
 
 def extract_prelim_registered_vars(prelim_path: str) -> Set[str]:
