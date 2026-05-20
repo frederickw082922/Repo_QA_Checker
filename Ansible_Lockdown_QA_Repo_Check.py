@@ -1469,15 +1469,60 @@ class FQCNCheck:
 class ManualWarnCountCheck:
     """Check that manual remediation tasks include the Warn Count block.
 
-    Also detects block-level vars with warn_control_id — vars must be at
-    task-level (same indentation as ansible.builtin.import_tasks:), NOT at
-    block-level (same indentation as block:).
+    Also detects misplaced `vars: warn_control_id` declarations. The legit
+    Lockdown DRY pattern is to declare warn_control_id once at the parent
+    task's task-scope, paired with a `block:` that contains the Warn Count
+    import_tasks:
+
+        - name: ...rule task...
+          vars:
+            warn_control_id: '...'
+          block:
+            - name: ...children...
+            - name: ...Warn Count
+              ansible.builtin.import_tasks: { file: warning_facts.yml }
+
+    A misplaced declaration is one where `vars: warn_control_id` appears at
+    task scope WITHOUT either a sibling `block:` plus a downstream
+    `warning_facts.yml` reference within that block. Those genuinely need
+    to be moved next to their import_tasks: line.
     """
     display_name = "Manual Warn Count"
 
     def __init__(self, scanner: RepoScanner):
         self.scanner = scanner
         self.d = scanner.directory
+
+    @staticmethod
+    def _is_legit_parent_vars_for_block(lines: List[str],
+                                        vars_line_idx: int) -> bool:
+        """Return True if the `vars:` at lines[vars_line_idx] belongs to a
+        parent task that pairs it with a `block:` containing a
+        `warning_facts.yml` import. That is the intended DRY Lockdown
+        convention and should not be flagged.
+        """
+        # Find task start: most recent `- name:` line at column 0
+        task_start = None
+        for back in range(vars_line_idx, -1, -1):
+            if re.match(r"^- name:", lines[back]):
+                task_start = back
+                break
+        if task_start is None:
+            return False
+        # Find task end: next `- name:` at column 0, or EOF
+        task_end = len(lines)
+        for fwd in range(vars_line_idx + 1, len(lines)):
+            if re.match(r"^- name:", lines[fwd]):
+                task_end = fwd
+                break
+        has_block = False
+        has_warning_facts = False
+        for k in range(task_start, task_end):
+            if re.match(r"^  block:\s*$", lines[k].rstrip()):
+                has_block = True
+            if "warning_facts.yml" in lines[k]:
+                has_warning_facts = True
+        return has_block and has_warning_facts
 
     def run(self) -> CheckResult:
         findings: List[Finding] = []
@@ -1520,11 +1565,15 @@ class ManualWarnCountCheck:
                             f"block{cid_text}",
                             "warning", "manual_warn_count"))
 
-                # --- Check 2: block-level vars with warn_control_id ---
+                # --- Check 2: misplaced vars with warn_control_id ---
+                # Legit DRY pattern: parent task scope `vars: warn_control_id`
+                # paired with `block:` that contains a warning_facts.yml
+                # import. Only flag when that pairing is absent.
                 if (re.match(r'^  vars:\s*$', line) and
                         i + 1 < len(lines) and
                         re.match(r'^    warn_control_id:',
-                                 lines[i + 1].rstrip())):
+                                 lines[i + 1].rstrip()) and
+                        not self._is_legit_parent_vars_for_block(lines, i)):
                     cid_match = re.search(
                         r"warn_control_id:\s*['\"]?([^'\"]+)",
                         lines[i + 1])
@@ -1532,9 +1581,10 @@ class ManualWarnCountCheck:
                     cid_text = f" ({cid})" if cid else ""
                     findings.append(Finding(
                         rel, i + 1,
-                        f"Block-level vars with warn_control_id{cid_text} — "
-                        f"should be task-level (same indent as "
-                        f"ansible.builtin.import_tasks:)",
+                        f"Misplaced vars with warn_control_id{cid_text} — "
+                        f"either declare at parent task scope with a sibling "
+                        f"block: containing warning_facts.yml, or place at "
+                        f"the same indent as ansible.builtin.import_tasks:",
                         "warning", "block_level_warn_vars"))
 
                 i += 1
