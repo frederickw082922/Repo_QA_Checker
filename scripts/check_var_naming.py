@@ -67,34 +67,38 @@ def extract_bridge_template_output_keys(repo_path):
 
 
 def extract_set_fact_vars(repo_path):
-    """Extract variables created by set_fact tasks in task files.
+    """Extract variables created by set_fact tasks in task and handler files.
 
     These are runtime-created variables, not expected in defaults/main.yml.
+    Scans both tasks/ and handlers/ because handlers can also use set_fact.
     """
     fact_vars = set()
-    tasks_dir = os.path.join(repo_path, "tasks")
-    if not os.path.isdir(tasks_dir):
-        return fact_vars
-
-    for root, dirs, filenames in os.walk(tasks_dir):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        for fname in filenames:
-            if not fname.endswith((".yml", ".yaml")):
-                continue
-            filepath = os.path.join(root, fname)
-            in_set_fact = False
-            with open(filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.rstrip()
-                    if re.search(r"set_fact:", s):
-                        in_set_fact = True
-                        continue
-                    if in_set_fact:
-                        fm = re.match(r"\s+([a-zA-Z_]\w*):", s)
-                        if fm:
-                            fact_vars.add(fm.group(1))
-                        elif s and not s.startswith("#") and not s.startswith(" "):
-                            in_set_fact = False
+    scan_dirs = [
+        os.path.join(repo_path, "tasks"),
+        os.path.join(repo_path, "handlers"),
+    ]
+    for scan_dir in scan_dirs:
+        if not os.path.isdir(scan_dir):
+            continue
+        for root, dirs, filenames in os.walk(scan_dir):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for fname in filenames:
+                if not fname.endswith((".yml", ".yaml")):
+                    continue
+                filepath = os.path.join(root, fname)
+                in_set_fact = False
+                with open(filepath, "r", encoding="utf-8") as f:
+                    for line in f:
+                        s = line.rstrip()
+                        if re.search(r"set_fact:", s):
+                            in_set_fact = True
+                            continue
+                        if in_set_fact:
+                            fm = re.match(r"\s+([a-zA-Z_]\w*):", s)
+                            if fm:
+                                fact_vars.add(fm.group(1))
+                            elif s and not s.startswith("#") and not s.startswith(" "):
+                                in_set_fact = False
     return fact_vars
 
 
@@ -288,6 +292,42 @@ def check_duplicate_defaults(repo_path):
     return issues
 
 
+def collect_deployed_templates(repo_path):
+    """Return set of template src paths actually deployed by task files.
+
+    Paths are normalised relative to the templates/ directory so they can be
+    matched against os.path.relpath(filepath, templates_dir).  Basenames are
+    also added to support simple filename-only references.
+    """
+    deployed = set()
+    tasks_dir = os.path.join(repo_path, "tasks")
+    if not os.path.isdir(tasks_dir):
+        return deployed
+
+    src_pat = re.compile(r"src:\s*['\"]?(.+?\.j2)['\"]?\s*(?:#.*)?$")
+    for root, dirs, filenames in os.walk(tasks_dir):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for fname in filenames:
+            if not fname.endswith((".yml", ".yaml")):
+                continue
+            filepath = os.path.join(root, fname)
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    m = src_pat.search(line.rstrip())
+                    if not m:
+                        continue
+                    src = m.group(1).strip("'\" ")
+                    # Dynamic paths with Jinja2 expressions cannot be resolved statically;
+                    # treat them as always-deployed so we do not suppress real errors.
+                    if "{{" in src:
+                        continue
+                    # Normalise: strip spurious leading templates/ prefix if present
+                    src = re.sub(r"^templates/", "", src)
+                    deployed.add(src)
+                    deployed.add(os.path.basename(src))
+    return deployed
+
+
 def check_forward_reverse(repo_path, config_prefix, rule_prefix, benchmark_type):
     """Check forward (defined->used) and reverse (used->defined) coverage.
 
@@ -329,6 +369,10 @@ def check_forward_reverse(repo_path, config_prefix, rule_prefix, benchmark_type)
                     if m:
                         defined[m.group(1)] = num
 
+    # Build deployed template set once; used by both forward and reverse scans
+    deployed_templates = collect_deployed_templates(repo_path)
+    templates_dir = os.path.join(repo_path, "templates")
+
     # Collect all tokens from tasks/templates/handlers for forward check
     usage_tokens = set()
     for subdir in ("tasks", "templates", "handlers"):
@@ -341,6 +385,13 @@ def check_forward_reverse(repo_path, config_prefix, rule_prefix, benchmark_type)
                 if not fname.endswith((".yml", ".yaml", ".j2")):
                     continue
                 filepath = os.path.join(root, fname)
+                # Skip orphaned templates — only scan templates actually deployed
+                # by a 'template: src:' task to avoid false positives from stale drafts
+                if fname.endswith(".j2") and os.path.isdir(templates_dir):
+                    rel_to_templates = os.path.relpath(filepath, templates_dir)
+                    if (rel_to_templates not in deployed_templates
+                            and os.path.basename(fname) not in deployed_templates):
+                        continue
                 with open(filepath, "r", encoding="utf-8") as f:
                     for line in f:
                         usage_tokens.update(re.findall(r"[a-zA-Z_]\w*", line))
@@ -396,6 +447,13 @@ def check_forward_reverse(repo_path, config_prefix, rule_prefix, benchmark_type)
                 if not fname.endswith((".yml", ".yaml", ".j2")):
                     continue
                 filepath = os.path.join(root, fname)
+                # Skip orphaned templates — variables in undeployed templates are
+                # not real runtime references; they produce false-positive errors
+                if fname.endswith(".j2") and os.path.isdir(templates_dir):
+                    rel_to_templates = os.path.relpath(filepath, templates_dir)
+                    if (rel_to_templates not in deployed_templates
+                            and os.path.basename(fname) not in deployed_templates):
+                        continue
                 rel = os.path.relpath(filepath, repo_path)
                 with open(filepath, "r", encoding="utf-8") as f:
                     for num, line in enumerate(f, 1):
