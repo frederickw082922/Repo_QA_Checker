@@ -4,7 +4,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
-## 2.9.0 - 2026-05-26
+## 2.8.0 - 2026-05-26
 
 ### Added
 
