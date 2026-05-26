@@ -155,6 +155,7 @@ if $RUN_CHECKS; then
     run_script "Template Headers"                 check_template_headers.py "$REPO"
     run_script "Variable Naming"                  check_var_naming.py     "$REPO"
     run_script "Audit Template Keys"              check_audit_keys.py     "$REPO"
+    run_script "shell pipefail"                   check_shell_pipefail.py     "$REPO"
 fi
 
 # ── Fix Scripts (dry-run or --fix) ────────────────────────────
@@ -182,6 +183,7 @@ if $RUN_FIXES; then
     run_script "ignore_errors to failed_when" fix_ignore_errors.py "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
     run_script "Missing no_log"              fix_no_log.py         "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
     run_script "Missing loop_control"        fix_loop_control.py   "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
+    run_script "shell pipefail"              fix_shell_pipefail.py "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
 fi
 
 # ── Summary ───────────────────────────────────────────────────

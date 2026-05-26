@@ -4,6 +4,18 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.8.0 - 2026-05-26
+
+### Added
+
+- **`fix_shell_pipefail.py`:** New fix script that finds and auto-remediates `ansible.builtin.shell` tasks missing `set -o pipefail` or `args: executable:`. Handles three cases: (A) block format missing pipefail, (B) inline format converted to block with pipefail and args inserted, (C) block format with pipefail but missing args. Preserves trailing `# noqa` comments on inline-to-block conversions. Supports `--dry-run`, `--exec-var` (default: `default_shell_executable`), and `--no-ansible-check` flags. Added to `run_all_checks.sh`.
+
+### Fixed
+
+- **`check_var_naming.py`: Orphaned template false positives:** Forward and reverse variable coverage checks now skip templates not referenced by any `src:` in task files. The new `collect_deployed_templates()` function walks `tasks/` for `src: *.j2` references and builds a deployed set; templates absent from that set are excluded from both forward (defined-but-unused) and reverse (used-but-undefined) scanning. Eliminates false positives caused by stale draft templates or templates replaced by inline `copy: content:`.
+
+---
+
 ## 2.8.0 - 2026-05-20
 
 ### Fixed
