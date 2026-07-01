@@ -72,6 +72,8 @@ class Issue:
     check: str
     severity: str  # error | warning | info
     message: str
+    file: str = ""
+    line: int = 0
 
 
 @dataclass
@@ -152,6 +154,7 @@ def check_role(role_path: str) -> RoleReport:
             check="structure",
             severity="error",
             message="defaults/main.yml not found",
+            file="defaults/main.yml",
         ))
         return report
 
@@ -168,6 +171,7 @@ def check_role(role_path: str) -> RoleReport:
             check="presence",
             severity="warning",
             message="No canonical audit variables found in defaults/main.yml or vars/audit.yml",
+            file="defaults/main.yml",
         ))
 
     if audit_lines is None:
@@ -175,6 +179,7 @@ def check_role(role_path: str) -> RoleReport:
             check="structure",
             severity="info",
             message="vars/audit.yml not present (acceptable for older roles)",
+            file="vars/audit.yml",
         ))
 
     # Check A — user-overridable vars must not be in vars/audit.yml
@@ -183,9 +188,11 @@ def check_role(role_path: str) -> RoleReport:
             check="A",
             severity="error",
             message=(
-                f"{name} in vars/audit.yml:{audit_keys[name]} "
+                f"{name} in vars/audit.yml "
                 "(move to defaults/main.yml; molecule cannot override role vars)"
             ),
+            file="vars/audit.yml",
+            line=audit_keys[name],
         ))
 
     # Check B — internal constants should not be in defaults/main.yml
@@ -194,9 +201,11 @@ def check_role(role_path: str) -> RoleReport:
             check="B",
             severity="warning",
             message=(
-                f"{name} in defaults/main.yml:{defaults_keys[name]} "
+                f"{name} in defaults/main.yml "
                 "(move to vars/audit.yml; role-internal constant)"
             ),
+            file="defaults/main.yml",
+            line=defaults_keys[name],
         ))
 
     # Duplicate definitions — vars/audit.yml wins over defaults
@@ -205,9 +214,11 @@ def check_role(role_path: str) -> RoleReport:
             check="dup",
             severity="error",
             message=(
-                f"{name} defined in both defaults/main.yml:{defaults_keys[name]} "
-                f"and vars/audit.yml:{audit_keys[name]} (vars wins; defaults entry is dead)"
+                f"{name} defined in both defaults/main.yml and vars/audit.yml "
+                "(vars wins; defaults entry is dead)"
             ),
+            file="vars/audit.yml",
+            line=audit_keys[name],
         ))
 
     # Check C — molecule cannot override vars/audit.yml entries
@@ -221,6 +232,8 @@ def check_role(role_path: str) -> RoleReport:
                 f"{name} in vars/audit.yml and molecule ({locations}); "
                 "molecule override is ignored"
             ),
+            file="vars/audit.yml",
+            line=audit_keys.get(name, 0),
         ))
 
     # Check D — canonical variables missing from both files
@@ -230,6 +243,7 @@ def check_role(role_path: str) -> RoleReport:
             check="D",
             severity="warning",
             message=f"{name} missing from defaults/main.yml and vars/audit.yml",
+            file="defaults/main.yml",
         ))
 
     # Check E — bridge template filename
@@ -240,12 +254,14 @@ def check_role(role_path: str) -> RoleReport:
             check="E",
             severity="error",
             message=f"{OLD_BRIDGE} present; rename to {NEW_BRIDGE}",
+            file=OLD_BRIDGE,
         ))
     elif not os.path.isfile(new_bridge) and audit_lines is not None:
         report.issues.append(Issue(
             check="E",
             severity="warning",
             message=f"Neither {NEW_BRIDGE} nor legacy bridge template found",
+            file=NEW_BRIDGE,
         ))
 
     return report
