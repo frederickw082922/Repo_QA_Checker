@@ -4,7 +4,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
-## 2.8.0 - 2026-07-01
+## 2.8.1 - 2026-07-01
 
 ### Added
 
@@ -17,8 +17,14 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 - **QA report artifact exclusion:** Spell, grammar, and company-naming checks no longer scan prior `qa_report_*` or `AL_QA_Report_*` files left in role directories. All existing report artifacts in the role root are auto-added to `exclude_paths` at scan start (not only the current run's output file). `fix_grammar.py` and `fix_spelling.py` apply the same skip pattern.
 - **`fix_shell_pipefail.py` Case D:** Shell tasks that put the command under `args.cmd` (with `ansible.builtin.shell:` and no block body) are migrated into the shell block after `set -o pipefail` instead of leaving an empty block. Fixes the broken layout produced when pipefail was inserted ahead of an `args:`/`cmd:` task.
-
+- **`fix_shell_pipefail.py` Case D `--dry-run` crash:** Preview no longer raises `KeyError: 'inline_cmd'` on a Case D task. The dry-run summary keyed the inline-command preview off `type != "A"`, which caught Case D (a `type == "D"` fix that has no `inline_cmd`); it now keys off `type == "B"` so Case D reports "insert pipefail".
+- **`fix_shell_pipefail.py` Case D apply corruption:** Applying a Case D fix no longer leaves the original `cmd:`/`executable:` lines stranded inside the shell block or duplicates the command. The migration used scan-time line indices that went stale once `set -o pipefail` was inserted, so `del` removed the wrong line. Case D is now rebuilt atomically (`_apply_case_d`): the shell block, `set -o pipefail`, the migrated command, and a preserved/added `args: executable:` are spliced in one pass. Verified idempotent and yamllint-clean.
+- **`check_shell_pipefail.py` double report:** A Case D task no longer emits two findings on the same line (one from `scan_file`, one from the args.cmd sweep). The args.cmd sweep now skips shell lines already reported by `scan_file`.
 - **Audit Template check:** `AuditTemplateCheck` now scans both `templates/lockdown_audit.yml.j2` (canonical) and `templates/ansible_vars_goss.yml.j2` (legacy). Previously only looked for the legacy filename, so migrated roles were incorrectly reported as SKIP.
+- **`check_audit_vars.py` CHECK E severity:** Presence of the legacy `ansible_vars_goss.yml.j2` bridge template is now a warning, not an error. The `lockdown_audit.yml.j2` rename is not yet a fleet-wide convention, so an error failed nearly every role in the shared QA suite.
+- **`check_audit_vars.py` CHECK C `set_fact` awareness:** Molecule audit-var overrides written via `set_fact` are no longer flagged as ineffective. `set_fact` (precedence 19) does override the `include_vars` (precedence 18) that loads `vars/audit.yml`; only lower-precedence play/host `vars:` assignments are now reported.
+- **QA Repo Check: report descriptions:** Added `CHECK_DESCRIPTIONS` entries for `Meta Validate`, `Audit Variable Placement`, and `Shell Pipefail Layout`, which previously rendered a blank description column and blank "Why these findings?" text in the generated report.
+- **README check table:** Now lists all 15 registered checks (previously stated 11 and omitted `meta_validate`, `manual_warn`, `audit_vars`, and `shell_pipefail`).
 - **QA Repo Check: `--only` check name list:** Added missing keys `meta_validate`, `manual_warn`, and `audit_vars` so `--only` / `--skip` behave consistently with the full check suite.
 - **QA Repo Check: dynamic import of `check_audit_vars.py`:** Register the loaded module in `sys.modules` before `exec_module()` so dataclass processing works on Python 3.14+ when the checker is imported from the main QA script.
 
@@ -29,17 +35,11 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 ### Added
 
 - **`fix_shell_pipefail.py`:** New fix script that finds and auto-remediates `ansible.builtin.shell` tasks missing `set -o pipefail` or `args: executable:`. Handles three cases: (A) block format missing pipefail, (B) inline format converted to block with pipefail and args inserted, (C) block format with pipefail but missing args. Preserves trailing `# noqa` comments on inline-to-block conversions. Supports `--dry-run`, `--exec-var` (default: `default_shell_executable`), and `--no-ansible-check` flags. Added to `run_all_checks.sh`.
+- **Cross-Repo Validator:** New helper `extract_runtime_defined_vars(tasks_dir)` walks every `*.yml` under `tasks/` to harvest `register:` targets and `set_fact:` block keys. Used by Check 15 (and available to other checks).
 
 ### Fixed
 
 - **`check_var_naming.py`: Orphaned template false positives:** Forward and reverse variable coverage checks now skip templates not referenced by any `src:` in task files. The new `collect_deployed_templates()` function walks `tasks/` for `src: *.j2` references and builds a deployed set; templates absent from that set are excluded from both forward (defined-but-unused) and reverse (used-but-undefined) scanning. Eliminates false positives caused by stale draft templates or templates replaced by inline `copy: content:`.
-
----
-
-## 2.8.0 - 2026-05-20
-
-### Fixed
-
 - **Cross-Repo Validator: Config Variable Parity (Check 8):** Eliminated false positives caused by static comparison of values where one side is a Jinja2 expression (e.g. `{{ list | join(",") }}` in defaults vs the resolved literal in audit vars). The check now skips equality when either side contains `{{ ... }}` markers. Also relaxed inline-comment stripping in `_strip_yaml_value` to require only single whitespace before `#` (per the YAML spec), so values like `sha512 # pragma: allowlist secret` compare equal to plain `sha512`.
 - **Cross-Repo Validator: Template-Goss Var Cross-Ref (Check 15):** Added support for runtime-set variables. The check now treats variables defined via `register:` or inside `set_fact:` blocks anywhere under `tasks/` as valid Jinja2 reference sources, alongside `defaults/main.yml`, `vars/audit.yml`, and Ansible builtins. The well-known runtime set (`system_is_container`, `os_release`, etc.) injected by `run_audit.sh` is also merged into the valid-sources set. Closes false positives on roles whose templates reference vars set during play execution.
 - **`run_all_checks.sh`:** Per-script pass/warn scoring now uses the script's actual exit code instead of regex-grepping the captured output. The previous regex (`: 0$`) misfired on tails like `Missing from all code: 0`, marking scripts with real warnings as PASS. Each `check_*.py` already exits `0` clean / `1` on issues, so this is a clean swap.
@@ -47,10 +47,6 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 - **Manual Warn Count check (`Ansible_Lockdown_QA_Repo_Check.py` `ManualWarnCountCheck`):** Made the `block_level_warn_vars` detection context-aware. Previously fired on any `vars: warn_control_id` at task scope regardless of surrounding structure, false-positiving on the legit Lockdown DRY pattern (one `vars:` declaration at parent task scope paired with a `block:` whose children import `warning_facts.yml`). Now suppresses when the parent task contains both a sibling `block:` AND a `warning_facts.yml` reference within that block scope. On UB22 V2R7 this dropped 28 findings to 1 — and the surviving finding (`tasks/Cat2/UBTU-22-291xxx.yml:33`, `UBTU-22-291015`) is a real bug previously hidden in the FP catalogue: `warn_control_id` declared but no `warning_facts.yml` import anywhere in the file.
 - **`fix_warn_count.py`:** Mirrored the context-aware check into the standalone fix script. `scan_block_level_vars` now skips the legit parent-vars+block pattern. Additionally hardened `fix_block_level_vars` with a safety guard: when no `warning_facts.yml` target exists in scope (i.e. the genuine "missing Warn Count" case), the function refuses to delete the orphan `vars:` block — previously it would silently delete with no replacement insert, hiding the missing-Warn-Count signal. Returns `(fixed_count, skipped_list)` so the caller can report `SKIPPED:` items with a "needs human decision" message instead of treating them as fixed.
 - **`dependency_graph.py`:** Reference scanner skipped any line whose stripped content started with `#`, treating it as a YAML comment. This misclassified literal `#`-prefixed lines inside YAML block scalars (e.g. `file_managed_by_ansible: |-` whose body contains `# Provided by {{ company_title }}`) as comments, causing variables referenced only in such block-scalar bodies to be reported as orphans. Now keeps the line when it contains a Jinja2 expression (`{{ ... }}`) — template content overrides the comment heuristic. On UB22 V2R7 this cleared the lone remaining `company_title` orphan FP, bringing dep-graph orphans to zero.
-
-### Added
-
-- **Cross-Repo Validator:** New helper `extract_runtime_defined_vars(tasks_dir)` walks every `*.yml` under `tasks/` to harvest `register:` targets and `set_fact:` block keys. Used by Check 15 (and available to other checks).
 
 ---
 
