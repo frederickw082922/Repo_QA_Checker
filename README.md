@@ -144,7 +144,7 @@ The tool runs 11 independent checks. Each produces a status of **PASS**, **FAIL*
 | 6 | **Variable Naming** | `var_naming` | Validates `register:` variable prefixes, detects duplicate register names (with mutually exclusive `when:` suppression), and duplicate defaults. |
 | 7 | **File Mode Quoting** | `file_mode` | Flags unquoted numeric `mode:` values (e.g., `mode: 0644` should be `mode: '0644'`). |
 | 8 | **Company Naming** | `company_naming` | Detects outdated company name references (configurable). |
-| 9 | **Audit Template** | `audit_template` | Checks `templates/ansible_vars_goss.yml.j2` for duplicate keys. |
+| 9 | **Audit Template** | `audit_template` | Checks `templates/lockdown_audit.yml.j2` and `templates/ansible_vars_goss.yml.j2` for duplicate keys. |
 | 10 | **FQCN Usage** | `fqcn` | Detects bare (non-FQCN) Ansible built-in module names (e.g., `command:` should be `ansible.builtin.command:`). |
 | 11 | **Rule Coverage** | `rule_coverage` | Cross-references rule toggle variables in `defaults/main.yml` against task `when:` conditions to find orphaned or missing rules. Auto-detects CIS (`{prefix}_rule_X_X_X`) vs STIG (`{prefix}_XXXXXX`) toggle patterns. |
 

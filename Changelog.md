@@ -8,7 +8,14 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ### Added
 
-- **`check_audit_vars.py`:** New check script that validates audit variable placement across Lockdown remediation roles. Enforces the canonical split from Private-RHEL10-CIS: user-overridable toggles (`setup_audit`, `run_audit`, `audit_only`, `fetch_audit_output`, `audit_output_collection_method`, `audit_output_destination`, `audit_run_heavy_tests`) belong in `defaults/main.yml`; role-internal constants (`audit_cmd_timeout`, `audit_bin_*`, `pre_audit_outfile`, etc.) belong in `vars/audit.yml`. Reports misplaced vars, duplicate definitions (vars wins over defaults), molecule override collisions, missing canonical keys, and legacy `ansible_vars_goss.yml.j2` bridge templates. Supports single-role and `--all` / `--compact` batch scans under CIS/ or STIG/ roots. Stdlib only. Added to `run_all_checks.sh`.
+- **`check_audit_vars.py`:** Standalone check script (stdlib only) that validates audit variable placement across Lockdown remediation roles. Enforces the canonical split from Private-RHEL10-CIS: user-overridable toggles (`setup_audit`, `run_audit`, `audit_only`, `fetch_audit_output`, `audit_output_collection_method`, `audit_output_destination`, `audit_run_heavy_tests`) belong in `defaults/main.yml`; role-internal constants (`audit_cmd_timeout`, `audit_bin_*`, `pre_audit_outfile`, etc.) belong in `vars/audit.yml`. Reports misplaced vars, duplicate definitions (vars wins over defaults), molecule override collisions, missing canonical keys, and legacy bridge templates. Supports single-role scans and `--all` / `--compact` batch mode under CIS/ or STIG/ roots. Added to `run_all_checks.sh`.
+- **QA Repo Check: Audit Variable Placement (`audit_vars`):** New check in `Ansible_Lockdown_QA_Repo_Check.py` that delegates to `check_audit_vars.py` and surfaces findings in the main QA report (Markdown/HTML/JSON/console). Skip with `--skip audit_vars`; run alone with `--only audit_vars`.
+
+### Fixed
+
+- **Audit Template check:** `AuditTemplateCheck` now scans both `templates/lockdown_audit.yml.j2` (canonical) and `templates/ansible_vars_goss.yml.j2` (legacy). Previously only looked for the legacy filename, so migrated roles were incorrectly reported as SKIP.
+- **QA Repo Check: `--only` check name list:** Added missing keys `meta_validate`, `manual_warn`, and `audit_vars` so `--only` / `--skip` behave consistently with the full check suite.
+- **QA Repo Check: dynamic import of `check_audit_vars.py`:** Register the loaded module in `sys.modules` before `exec_module()` so dataclass processing works on Python 3.14+ when the checker is imported from the main QA script.
 
 ---
 
