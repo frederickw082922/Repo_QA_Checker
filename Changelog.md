@@ -4,6 +4,14 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.8.0 - 2026-07-01
+
+### Added
+
+- **`check_audit_vars.py`:** New check script that validates audit variable placement across Lockdown remediation roles. Enforces the canonical split from Private-RHEL10-CIS: user-overridable toggles (`setup_audit`, `run_audit`, `audit_only`, `fetch_audit_output`, `audit_output_collection_method`, `audit_output_destination`, `audit_run_heavy_tests`) belong in `defaults/main.yml`; role-internal constants (`audit_cmd_timeout`, `audit_bin_*`, `pre_audit_outfile`, etc.) belong in `vars/audit.yml`. Reports misplaced vars, duplicate definitions (vars wins over defaults), molecule override collisions, missing canonical keys, and legacy `ansible_vars_goss.yml.j2` bridge templates. Supports single-role and `--all` / `--compact` batch scans under CIS/ or STIG/ roots. Stdlib only. Added to `run_all_checks.sh`.
+
+---
+
 ## 2.8.0 - 2026-05-26
 
 ### Added

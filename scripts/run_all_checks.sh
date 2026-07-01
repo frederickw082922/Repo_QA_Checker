@@ -155,6 +155,7 @@ if $RUN_CHECKS; then
     run_script "Template Headers"                 check_template_headers.py "$REPO"
     run_script "Variable Naming"                  check_var_naming.py     "$REPO"
     run_script "Audit Template Keys"              check_audit_keys.py     "$REPO"
+    run_script "Audit Variable Placement"         check_audit_vars.py     "$REPO"
     run_script "shell pipefail"                   check_shell_pipefail.py     "$REPO"
 fi
 
