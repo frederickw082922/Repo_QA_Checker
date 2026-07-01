@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.8.0
+**Version:** 2.8.1
 
 ---
 
@@ -29,7 +29,7 @@ Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/a
 
 ## Overview
 
-`Ansible_Lockdown_QA_Repo_Check.py` is a single-file Python tool that runs 13 quality checks against any Ansible-Lockdown role repository. It validates YAML syntax, Ansible best practices, spelling, grammar, variable usage, naming conventions, FQCN compliance, rule coverage, and more.
+`Ansible_Lockdown_QA_Repo_Check.py` is a single-file Python tool that runs 15 quality checks against any Ansible-Lockdown role repository. It validates YAML syntax, Ansible best practices, spelling, grammar, variable usage, naming conventions, FQCN compliance, rule coverage, and more.
 
 Key features:
 
@@ -431,7 +431,7 @@ Add the following to your Ansible role's `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.8.0  # pin to a release tag
+  rev: v2.8.1  # pin to a release tag
   hooks:
     - id: ansible-lockdown-qa
 ```
@@ -444,7 +444,7 @@ You can override the default `args` in your `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.8.0
+  rev: v2.8.1
   hooks:
     - id: ansible-lockdown-qa
       args: ['-d', '.', '--console', '--no-report', '--skip', 'grammar']
@@ -456,7 +456,7 @@ By default, the `yamllint` and `ansible-lint` checks are skipped gracefully when
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.8.0
+  rev: v2.8.1
   hooks:
     - id: ansible-lockdown-qa
       additional_dependencies: ['yamllint', 'ansible-lint']
