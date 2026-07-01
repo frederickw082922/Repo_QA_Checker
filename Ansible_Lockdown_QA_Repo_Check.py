@@ -16,6 +16,7 @@ import argparse
 import concurrent.futures
 import datetime
 import html as html_mod
+import importlib.util
 import json
 import os
 import re
@@ -554,6 +555,7 @@ class RepoScanner:
             ("company_naming",  CompanyNamingCheck),
             ("meta_validate",   MetaValidateCheck),
             ("audit_template",  AuditTemplateCheck),
+            ("audit_vars",      AuditVarsCheck),
             ("fqcn",            FQCNCheck),
             ("manual_warn",     ManualWarnCountCheck),
             ("rule_coverage",   RuleCoverageCheck),
@@ -1334,17 +1336,17 @@ class MetaValidateCheck:
 class AuditTemplateCheck:
     display_name = "Audit Template"
 
+    BRIDGE_TEMPLATES = (
+        "lockdown_audit.yml.j2",
+        "ansible_vars_goss.yml.j2",
+    )
+
     def __init__(self, scanner: RepoScanner):
         self.scanner = scanner
 
-    def run(self) -> CheckResult:
+    def _scan_template(self, rel_path: str,
+                       lines: List[str]) -> List[Finding]:
         findings: List[Finding] = []
-        tmpl = os.path.join(self.scanner.directory, "templates",
-                            "ansible_vars_goss.yml.j2")
-        if not os.path.isfile(tmpl):
-            return CheckResult(self.display_name, "SKIP",
-                               summary="Goss audit template not found")
-        lines = self.scanner.read_lines(tmpl)
         seen: Dict[tuple, int] = {}
         loop_depth = 0
         cond_stack: list = []
@@ -1385,15 +1387,92 @@ class AuditTemplateCheck:
                 lookup = (key, scope)
                 if lookup in seen:
                     findings.append(Finding(
-                        "templates/ansible_vars_goss.yml.j2", num,
+                        rel_path, num,
                         f"Duplicate audit key '{key}' "
                         f"(first at line {seen[lookup]})",
                         "warning", "audit_template"))
                 else:
                     seen[lookup] = num
+        return findings
+
+    def run(self) -> CheckResult:
+        findings: List[Finding] = []
+        templates_dir = os.path.join(self.scanner.directory, "templates")
+        scanned: List[str] = []
+
+        for name in self.BRIDGE_TEMPLATES:
+            rel_path = os.path.join("templates", name)
+            tmpl = os.path.join(templates_dir, name)
+            if not os.path.isfile(tmpl):
+                continue
+            scanned.append(name)
+            findings.extend(
+                self._scan_template(rel_path, self.scanner.read_lines(tmpl)))
+
+        if not scanned:
+            return CheckResult(self.display_name, "SKIP",
+                               summary="Goss audit bridge template not found")
+
         status = "PASS" if not findings else "FAIL"
-        return CheckResult(self.display_name, status, findings,
-                           f"{len(findings)} issue(s)")
+        summary = f"{len(findings)} issue(s) in {', '.join(scanned)}"
+        return CheckResult(self.display_name, status, findings, summary)
+
+
+def _load_check_audit_vars_module():
+    """Import scripts/check_audit_vars.py without installing a package."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "scripts",
+        "check_audit_vars.py",
+    )
+    spec = importlib.util.spec_from_file_location("_check_audit_vars", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load audit vars checker from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class AuditVarsCheck:
+    """Validate audit variable placement (defaults vs vars/audit.yml)."""
+    display_name = "Audit Variable Placement"
+
+    def __init__(self, scanner: RepoScanner):
+        self.scanner = scanner
+
+    def run(self) -> CheckResult:
+        try:
+            checker = _load_check_audit_vars_module()
+        except ImportError as exc:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary=f"Audit vars checker unavailable: {exc}",
+            )
+
+        report = checker.check_role(self.scanner.directory)
+        findings: List[Finding] = []
+        for issue in report.issues:
+            if issue.severity == "info":
+                continue
+            findings.append(Finding(
+                file=issue.file or "defaults/main.yml",
+                line=issue.line,
+                description=f"CHECK {issue.check}: {issue.message}",
+                severity=issue.severity,
+                check_name="audit_vars",
+            ))
+
+        if report.errors:
+            status = "FAIL"
+        elif report.warnings:
+            status = "WARN"
+        else:
+            status = "PASS"
+        return CheckResult(
+            self.display_name, status, findings,
+            f"{len(findings)} issue(s)",
+        )
 
 
 class FQCNCheck:
@@ -1787,11 +1866,12 @@ CHECK_CRITERIA: Dict[str, str] = {
         "that was not updated after a rename."
     ),
     "Audit Template": (
-        "Validates the Goss audit variable template "
-        "(templates/ansible_vars_goss.yml.j2) for duplicate keys. Duplicate "
-        "keys in YAML cause one value to silently override the other, leading "
-        "to audit tests using wrong variable values. Findings appear here when "
-        "the same variable name appears more than once in the template."
+        "Validates Goss audit bridge templates "
+        "(templates/lockdown_audit.yml.j2 and templates/ansible_vars_goss.yml.j2) "
+        "for duplicate keys. Duplicate keys in YAML cause one value to silently "
+        "override the other, leading to audit tests using wrong variable values. "
+        "Findings appear here when the same variable name appears more than once "
+        "in a template."
     ),
     "FQCN Usage": (
         "Detects bare (non-fully-qualified) Ansible module names in tasks and "
@@ -2385,8 +2465,8 @@ def parse_args() -> argparse.Namespace:
 
             check names for --skip:
               yamllint, ansiblelint, spelling, grammar, unused_vars,
-              var_naming, file_mode, company_naming, audit_template,
-              fqcn, manual_warn, rule_coverage
+              var_naming, file_mode, company_naming, meta_validate,
+              audit_template, audit_vars, fqcn, manual_warn, rule_coverage
 
             exit codes:
               0  All checks passed (or only warnings without --strict)
@@ -2456,8 +2536,9 @@ def main() -> None:
     if args.only:
         all_check_names = {
             "yamllint", "ansiblelint", "spelling", "grammar", "unused_vars",
-            "var_naming", "file_mode", "company_naming", "audit_template",
-            "fqcn", "rule_coverage",
+            "var_naming", "file_mode", "company_naming", "meta_validate",
+            "audit_template", "audit_vars", "fqcn", "manual_warn",
+            "rule_coverage",
         }
         only = {s.strip().lower() for s in args.only.split(",") if s.strip()}
         skip |= all_check_names - only
