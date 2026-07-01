@@ -50,7 +50,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.8.0"
+VERSION = "2.8.1"
 
 BENCHMARK_STIG = "stig"
 BENCHMARK_CIS = "cis"

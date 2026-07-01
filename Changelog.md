@@ -25,6 +25,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 - **`check_audit_vars.py` CHECK C `set_fact` awareness:** Molecule audit-var overrides written via `set_fact` are no longer flagged as ineffective. `set_fact` (precedence 19) does override the `include_vars` (precedence 18) that loads `vars/audit.yml`; only lower-precedence play/host `vars:` assignments are now reported.
 - **QA Repo Check: report descriptions:** Added `CHECK_DESCRIPTIONS` entries for `Meta Validate`, `Audit Variable Placement`, and `Shell Pipefail Layout`, which previously rendered a blank description column and blank "Why these findings?" text in the generated report.
 - **README check table:** Now lists all 15 registered checks (previously stated 11 and omitted `meta_validate`, `manual_warn`, `audit_vars`, and `shell_pipefail`).
+- **Version alignment:** Bumped the bundled sub-tool versions (`scripts/audit_compare/audit_compare.py`, `scripts/cross_repo_validator/cross_repo_validator.py`, and the cross-repo validator README) to 2.8.1 so the whole repository moves in lockstep.
 - **QA Repo Check: `--only` check name list:** Added missing keys `meta_validate`, `manual_warn`, and `audit_vars` so `--only` / `--skip` behave consistently with the full check suite.
 - **QA Repo Check: dynamic import of `check_audit_vars.py`:** Register the loaded module in `sys.modules` before `exec_module()` so dataclass processing works on Python 3.14+ when the checker is imported from the main QA script.
 
