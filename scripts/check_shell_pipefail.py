@@ -152,8 +152,11 @@ def check_role(role_path: str, scan_mod) -> RoleReport:
             report.issues.extend(
                 _wrong_executable_var_issues(rel, exec_var, file_lines)
             )
+            # scan_file already reports the Case D shell line above; pass those
+            # line numbers so args.cmd findings are not double-counted.
+            reported_lines = {fix["line_idx"] + 1 for fix in fixes}
             report.issues.extend(
-                _args_cmd_shell_issues(rel, file_lines, scan_mod)
+                _args_cmd_shell_issues(rel, file_lines, scan_mod, reported_lines)
             )
 
     return report
@@ -163,14 +166,19 @@ def _args_cmd_shell_issues(
     rel: str,
     lines: list[str],
     scan_mod,
+    reported_lines: set[int] | None = None,
 ) -> list[Issue]:
     """Flag shell tasks that still use args.cmd or an empty shell body."""
+    reported_lines = reported_lines or set()
     issues: list[Issue] = []
     shell_re = re.compile(r"^(\s+)ansible\.builtin\.shell:")
     i = 0
     while i < len(lines):
         m = shell_re.match(lines[i])
         if not m:
+            i += 1
+            continue
+        if (i + 1) in reported_lines:
             i += 1
             continue
         shell_indent = len(m.group(1))
