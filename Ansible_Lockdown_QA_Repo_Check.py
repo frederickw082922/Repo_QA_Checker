@@ -578,6 +578,7 @@ class RepoScanner:
             ("meta_validate",   MetaValidateCheck),
             ("audit_template",  AuditTemplateCheck),
             ("audit_vars",      AuditVarsCheck),
+            ("shell_pipefail",  ShellPipefailCheck),
             ("fqcn",            FQCNCheck),
             ("manual_warn",     ManualWarnCountCheck),
             ("rule_coverage",   RuleCoverageCheck),
@@ -1483,6 +1484,62 @@ class AuditVarsCheck:
                 description=f"CHECK {issue.check}: {issue.message}",
                 severity=issue.severity,
                 check_name="audit_vars",
+            ))
+
+        if report.errors:
+            status = "FAIL"
+        elif report.warnings:
+            status = "WARN"
+        else:
+            status = "PASS"
+        return CheckResult(
+            self.display_name, status, findings,
+            f"{len(findings)} issue(s)",
+        )
+
+
+def _load_check_shell_pipefail_module():
+    """Import scripts/check_shell_pipefail.py without installing a package."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "scripts",
+        "check_shell_pipefail.py",
+    )
+    spec = importlib.util.spec_from_file_location("_check_shell_pipefail", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load shell pipefail checker from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class ShellPipefailCheck:
+    """Validate ansible.builtin.shell pipefail and args.executable layout."""
+    display_name = "Shell Pipefail Layout"
+
+    def __init__(self, scanner: RepoScanner):
+        self.scanner = scanner
+
+    def run(self) -> CheckResult:
+        try:
+            checker = _load_check_shell_pipefail_module()
+            scan_mod = checker._load_scan_module()
+        except ImportError as exc:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary=f"Shell pipefail checker unavailable: {exc}",
+            )
+
+        report = checker.check_role(self.scanner.directory, scan_mod)
+        findings: List[Finding] = []
+        for issue in report.issues:
+            findings.append(Finding(
+                file=issue.file or "tasks/",
+                line=issue.line,
+                description=issue.message,
+                severity=issue.severity,
+                check_name="shell_pipefail",
             ))
 
         if report.errors:
@@ -2488,7 +2545,7 @@ def parse_args() -> argparse.Namespace:
             check names for --skip:
               yamllint, ansiblelint, spelling, grammar, unused_vars,
               var_naming, file_mode, company_naming, meta_validate,
-              audit_template, audit_vars, fqcn, manual_warn, rule_coverage
+              audit_template, audit_vars, shell_pipefail, fqcn, manual_warn, rule_coverage
 
             exit codes:
               0  All checks passed (or only warnings without --strict)
@@ -2559,7 +2616,7 @@ def main() -> None:
         all_check_names = {
             "yamllint", "ansiblelint", "spelling", "grammar", "unused_vars",
             "var_naming", "file_mode", "company_naming", "meta_validate",
-            "audit_template", "audit_vars", "fqcn", "manual_warn",
+            "audit_template", "audit_vars", "shell_pipefail", "fqcn", "manual_warn",
             "rule_coverage",
         }
         only = {s.strip().lower() for s in args.only.split(",") if s.strip()}

@@ -184,7 +184,7 @@ if $RUN_FIXES; then
     run_script "ignore_errors to failed_when" fix_ignore_errors.py "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
     run_script "Missing no_log"              fix_no_log.py         "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
     run_script "Missing loop_control"        fix_loop_control.py   "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
-    run_script "shell pipefail"              fix_shell_pipefail.py "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
+    run_script "shell pipefail"              fix_shell_pipefail.py "$REPO/tasks" ${FIX_FLAG:+"$FIX_FLAG"}
 fi
 
 # ── Summary ───────────────────────────────────────────────────
