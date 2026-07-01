@@ -19,6 +19,11 @@ The script handles three fix cases:
   Case C -- block format, has pipefail, missing args:
     Insert args: executable: block after the shell block content.
 
+  Case D -- command lives under args.cmd instead of the shell block:
+    Move args.cmd into the shell block after set -o pipefail; remove args.cmd.
+    Also adds | / pipefail when those are missing on ansible.builtin.shell: tasks
+    that jump straight to an args: block.
+
   Trailing '# noqa' comments on inline lines are preserved on the | indicator:
     ansible.builtin.shell: "cmd"  # noqa foo
   ->
@@ -139,6 +144,51 @@ def task_has_args_executable(lines, shell_line_idx):
     return False
 
 
+def find_args_cmd(lines, shell_line_idx, shell_indent):
+    """Return (cmd_line_idx, cmd_text) when the shell command lives under args.cmd."""
+    in_args = False
+    for j in range(shell_line_idx + 1, len(lines)):
+        line = lines[j]
+        if re.match(r"\s*- name:", line):
+            break
+        stripped = line.strip()
+        if not stripped:
+            continue
+        cind = leading_spaces(line)
+        if cind <= shell_indent and not stripped.startswith("args:"):
+            break
+        if stripped.startswith("args:"):
+            in_args = True
+            continue
+        if in_args and re.match(r"\s+cmd:\s+", line):
+            cmd_raw = line.split(":", 1)[1].strip()
+            cmd, _ = parse_inline_value(cmd_raw)
+            return j, cmd
+    return None
+
+
+def collect_shell_body_commands(lines, shell_line_idx, shell_indent):
+    """Return shell block body lines that appear before the task args: block."""
+    commands = []
+    for j in range(shell_line_idx + 1, len(lines)):
+        line = lines[j]
+        stripped = line.strip()
+        if not stripped:
+            continue
+        cind = leading_spaces(line)
+        if cind <= shell_indent:
+            if stripped.startswith("args:"):
+                break
+            break
+        commands.append(stripped)
+    return commands
+
+
+def task_has_shell_command(body_commands):
+    """Return True when the shell block contains a command besides pipefail."""
+    return any(not cmd.startswith("set -o pipefail") for cmd in body_commands)
+
+
 def find_block_end(lines, shell_line_idx, shell_indent):
     """Return index of first non-empty line at indent <= shell_indent after block content.
 
@@ -230,12 +280,37 @@ def scan_file(filepath, exec_var=DEFAULT_EXEC_VAR):
                 j += 1
 
             has_args = task_has_args_executable(lines, i)
+            body_commands = collect_shell_body_commands(lines, i, shell_indent)
+            has_shell_command = task_has_shell_command(body_commands)
+            args_cmd = find_args_cmd(lines, i, shell_indent)
 
             if pipefail_misplaced:
                 warnings.append({"type": "pipefail_misplaced", "line_idx": i})
 
+            if args_cmd and not has_shell_command:
+                cmd_line_idx, cmd_text = args_cmd
+                fix = {
+                    "type": "D",
+                    "line_idx": i,
+                    "shell_indent": shell_indent,
+                    "trailing_comment": trailing_comment,
+                    "needs_block_indicator": not has_block_indicator,
+                    "needs_pipefail": not has_pipefail,
+                    "has_args": has_args,
+                    "content_indent": content_indent,
+                    "insert_idx": content_start if content_start is not None else i + 1,
+                    "migrate_cmd": True,
+                    "cmd_line_idx": cmd_line_idx,
+                    "cmd_text": cmd_text,
+                }
+                if not has_args:
+                    fix["args_idx"] = find_block_end(lines, i, shell_indent)
+                fixes.append(fix)
+                i += 1
+                continue
+
             # Skip only when everything is already correct
-            if has_block_indicator and has_pipefail and has_args:
+            if has_block_indicator and has_pipefail and has_args and has_shell_command:
                 i += 1
                 continue
 
@@ -322,7 +397,7 @@ def apply_fixes(lines, fixes, exec_var=DEFAULT_EXEC_VAR):
 
         # --- Insert / convert for pipefail ---
         if fix.get("needs_pipefail"):
-            if fix["type"] == "A":
+            if fix["type"] in ("A", "D"):
                 insert_line = " " * fix["content_indent"] + "set -o pipefail\n"
                 lines.insert(fix["insert_idx"], insert_line)
 
@@ -340,6 +415,27 @@ def apply_fixes(lines, fixes, exec_var=DEFAULT_EXEC_VAR):
                     content_prefix + cmd + "\n",
                 ]
                 lines[fix["line_idx"]: fix["line_idx"] + 1] = replacement
+
+        # --- Migrate args.cmd into the shell block (Case D) ---
+        if fix.get("migrate_cmd"):
+            cmd_line_idx = fix["cmd_line_idx"]
+            cmd_text = fix["cmd_text"]
+            cindent = fix["content_indent"]
+            shell_idx = fix["line_idx"]
+
+            insert_at = shell_idx + 1
+            for j in range(shell_idx + 1, len(lines)):
+                if lines[j].lstrip().startswith("set -o pipefail"):
+                    insert_at = j + 1
+                    break
+                cind = leading_spaces(lines[j])
+                if cind <= fix["shell_indent"] and lines[j].strip().startswith("args:"):
+                    break
+
+            del lines[cmd_line_idx]
+            if cmd_line_idx < insert_at:
+                insert_at -= 1
+            lines.insert(insert_at, " " * cindent + cmd_text + "\n")
 
     return lines
 
@@ -464,6 +560,8 @@ def main():
                 parts = []
                 if fix.get("needs_block_indicator"):
                     parts.append("add | indicator")
+                if fix.get("migrate_cmd"):
+                    parts.append("move args.cmd into shell block")
                 if fix.get("needs_pipefail"):
                     if fix["type"] == "A":
                         parts.append("insert pipefail")
