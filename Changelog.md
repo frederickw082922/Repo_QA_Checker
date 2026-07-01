@@ -13,6 +13,8 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ### Fixed
 
+- **QA report artifact exclusion:** Spell, grammar, and company-naming checks no longer scan prior `qa_report_*` or `AL_QA_Report_*` files left in role directories. All existing report artifacts in the role root are auto-added to `exclude_paths` at scan start (not only the current run's output file). `fix_grammar.py` and `fix_spelling.py` apply the same skip pattern.
+
 - **Audit Template check:** `AuditTemplateCheck` now scans both `templates/lockdown_audit.yml.j2` (canonical) and `templates/ansible_vars_goss.yml.j2` (legacy). Previously only looked for the legacy filename, so migrated roles were incorrectly reported as SKIP.
 - **QA Repo Check: `--only` check name list:** Added missing keys `meta_validate`, `manual_warn`, and `audit_vars` so `--only` / `--skip` behave consistently with the full check suite.
 - **QA Repo Check: dynamic import of `check_audit_vars.py`:** Register the loaded module in `sys.modules` before `exec_module()` so dataclass processing works on Python 3.14+ when the checker is imported from the main QA script.

@@ -261,9 +261,31 @@ TASK_KEYWORDS: Set[str] = {
 # Directories / patterns to skip when walking the repo
 SKIP_DIRS: Set[str] = {".git", "__pycache__", ".github", "collections"}
 
+# Prior QA report artifacts left in role directories (not role source)
+QA_ARTIFACT_BASENAME_RE = re.compile(
+    r"^(?:qa_report|AL_QA_Report_).*\.(?:md|html|json)$",
+    re.IGNORECASE,
+)
+
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
+
+def is_qa_artifact_basename(basename: str) -> bool:
+    """Return True if *basename* is a generated QA report file."""
+    return bool(QA_ARTIFACT_BASENAME_RE.match(basename))
+
+
+def discover_qa_artifact_paths(directory: str) -> Set[str]:
+    """Return absolute paths to QA report artifacts in *directory* (non-recursive)."""
+    paths: Set[str] = set()
+    if not os.path.isdir(directory):
+        return paths
+    for fname in os.listdir(directory):
+        if is_qa_artifact_basename(fname):
+            paths.add(os.path.abspath(os.path.join(directory, fname)))
+    return paths
+
 
 def _relpath(filepath: str, base: str) -> str:
     """Return a clean relative path for display."""
@@ -816,7 +838,7 @@ class GrammarCheck:
             basename = os.path.basename(fp)
             if is_md and basename in self._SKIP_MD_BASENAMES:
                 continue
-            if is_md and basename.startswith("qa_report") and basename.endswith(".md"):
+            if is_qa_artifact_basename(basename):
                 continue
             if basename == "aide.conf.j2":
                 continue
@@ -2560,6 +2582,7 @@ def main() -> None:
     else:
         output_path = None  # will be set after scanner provides metadata
     exclude_paths = {os.path.abspath(output_path)} if output_path else set()
+    exclude_paths |= discover_qa_artifact_paths(directory)
 
     # Progress: auto-enable on TTY unless explicitly disabled
     show_progress = (not args.no_progress

@@ -69,6 +69,14 @@ DEFAULT_SKIP_DIRS = {'.git', '.github', 'molecule', 'tests', '__pycache__', '.an
 # Files to skip entirely — changelogs contain historical descriptions of grammar
 # fixes (e.g., "fixed repeated words: 'is is', 'of of'") which are not errors
 SKIP_FILENAMES = {'changelog.md', 'CHANGELOG.md', 'Changelog.md'}
+QA_ARTIFACT_BASENAME_RE = re.compile(
+    r'^(?:qa_report|AL_QA_Report_).*\.(?:md|html|json)$',
+    re.IGNORECASE,
+)
+
+
+def is_qa_artifact_basename(basename: str) -> bool:
+    return bool(QA_ARTIFACT_BASENAME_RE.match(basename))
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +90,8 @@ def find_files(repo_path, skip_dirs):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
         for fname in filenames:
             if fname in SKIP_FILENAMES:
+                continue
+            if is_qa_artifact_basename(fname):
                 continue
             if any(fname.endswith(ext) for ext in EXTENSIONS):
                 files.append(os.path.join(root, fname))
