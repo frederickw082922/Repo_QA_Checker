@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.8.0"
+TOOL_VERSION = "2.8.1"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -1867,8 +1867,18 @@ CHECK_DESCRIPTIONS: Dict[str, str] = {
         "Are there outdated company/organization name references that "
         "need updating?"
     ),
+    "Meta Validate": (
+        "Does meta/main.yml declare author, company, and min_ansible_version?"
+    ),
     "Audit Template": (
         "Does the goss audit variable template contain any duplicate keys?"
+    ),
+    "Audit Variable Placement": (
+        "Are audit variables in the right file (user-overridable toggles in "
+        "defaults/main.yml, role-internal constants in vars/audit.yml)?"
+    ),
+    "Shell Pipefail Layout": (
+        "Do ansible.builtin.shell tasks set -o pipefail and args: executable:?"
     ),
     "FQCN Usage": (
         "Are all Ansible module names fully qualified (ansible.builtin.*)?"
@@ -1944,6 +1954,12 @@ CHECK_CRITERIA: Dict[str, str] = {
         "company_old_names in .qa_config.yml) are found, indicating branding "
         "that was not updated after a rename."
     ),
+    "Meta Validate": (
+        "Validates meta/main.yml for the expected galaxy metadata: author, "
+        "company, and min_ansible_version. Findings appear here when a required "
+        "field is missing or does not match the Lockdown convention, which can "
+        "break Galaxy publishing or platform declarations."
+    ),
     "Audit Template": (
         "Validates Goss audit bridge templates "
         "(templates/lockdown_audit.yml.j2 and templates/ansible_vars_goss.yml.j2) "
@@ -1951,6 +1967,22 @@ CHECK_CRITERIA: Dict[str, str] = {
         "override the other, leading to audit tests using wrong variable values. "
         "Findings appear here when the same variable name appears more than once "
         "in a template."
+    ),
+    "Audit Variable Placement": (
+        "Validates that audit variables live in the correct file: "
+        "user-overridable toggles (setup_audit, run_audit, audit_only, "
+        "fetch_audit_output, ...) in defaults/main.yml, and role-internal "
+        "constants (audit_cmd_timeout, audit_bin_*, pre/post_audit_outfile, ...) "
+        "in vars/audit.yml. A var in vars/audit.yml cannot be overridden from "
+        "molecule play/host vars (include_vars outranks them), so misplacement "
+        "silently breaks overrides. Delegates to scripts/check_audit_vars.py."
+    ),
+    "Shell Pipefail Layout": (
+        "Validates that ansible.builtin.shell tasks set 'set -o pipefail' as the "
+        "first line of the shell block and declare args: executable: "
+        '"{{ <prefix>_shell_executable }}". Without pipefail a failing command '
+        "in a pipe is masked by the exit status of the last command. Delegates "
+        "to scripts/check_shell_pipefail.py."
     ),
     "FQCN Usage": (
         "Detects bare (non-fully-qualified) Ansible module names in tasks and "

@@ -50,7 +50,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.8.0"
+VERSION = "2.8.1"
 
 BENCHMARK_STIG = "stig"
 BENCHMARK_CIS = "cis"
@@ -3442,7 +3442,16 @@ def main() -> None:
 
     # Paths
     defaults_path = os.path.join(remediation_dir, "defaults", "main.yml")
-    template_path = os.path.join(remediation_dir, "templates", "ansible_vars_goss.yml.j2")
+    # Bridge (audit-vars) template: the New Alignment Strategy renamed
+    # ansible_vars_goss.yml.j2 -> lockdown_audit.yml.j2. Resolve whichever
+    # exists (prefer the new name), falling back to the legacy name for older repos.
+    _template_dir = os.path.join(remediation_dir, "templates")
+    template_path = next(
+        (os.path.join(_template_dir, _n)
+         for _n in ("lockdown_audit.yml.j2", "ansible_vars_goss.yml.j2")
+         if os.path.isfile(os.path.join(_template_dir, _n))),
+        os.path.join(_template_dir, "ansible_vars_goss.yml.j2"),
+    )
     tasks_dir = os.path.join(remediation_dir, "tasks")
     audit_vars_path = discover_audit_vars_file(audit_dir)
     audit_vars_name = os.path.relpath(audit_vars_path, audit_dir)

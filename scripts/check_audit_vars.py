@@ -112,14 +112,34 @@ def _top_level_keys(lines: list[str]) -> dict[str, int]:
 
 
 def _molecule_var_refs(role_path: str) -> dict[str, list[str]]:
-    """Find variable assignments in molecule YAML files."""
+    """Find play/host var assignments in molecule YAML files.
+
+    Assignments inside a ``set_fact:`` block are excluded: set_fact has
+    precedence 19, which DOES override the ``include_vars`` (precedence 18)
+    that loads ``vars/audit.yml``, so it is a legitimate way to override an
+    audit var from molecule and must not be flagged by CHECK C.
+    """
+    set_fact_re = re.compile(r"(^|\.)set_fact\s*:")
     refs: dict[str, list[str]] = {}
     for rel in MOLECULE_FILES:
         path = os.path.join(role_path, rel)
         lines = _read_lines(path)
         if lines is None:
             continue
+        set_fact_indent: int | None = None
         for index, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(line) - len(line.lstrip())
+            # Leave the set_fact scope once indentation returns to its level.
+            if set_fact_indent is not None and indent <= set_fact_indent:
+                set_fact_indent = None
+            if set_fact_re.search(stripped):
+                set_fact_indent = indent
+                continue
+            if set_fact_indent is not None:
+                continue  # child of a set_fact block -> legitimate override
             match = re.match(r"^\s+([a-zA-Z_][\w.-]*)\s*:", line)
             if match:
                 name = match.group(1)
@@ -250,9 +270,12 @@ def check_role(role_path: str) -> RoleReport:
     old_bridge = os.path.join(role_path, OLD_BRIDGE)
     new_bridge = os.path.join(role_path, NEW_BRIDGE)
     if os.path.isfile(old_bridge):
+        # Warning, not error: the lockdown_audit.yml.j2 rename is not yet a
+        # fleet-wide convention (most roles still ship the legacy name), so an
+        # error here would fail nearly every role in the shared QA suite.
         report.issues.append(Issue(
             check="E",
-            severity="error",
+            severity="warning",
             message=f"{OLD_BRIDGE} present; rename to {NEW_BRIDGE}",
             file=OLD_BRIDGE,
         ))

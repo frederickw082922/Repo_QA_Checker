@@ -372,11 +372,69 @@ def scan_file(filepath, exec_var=DEFAULT_EXEC_VAR):
     return lines, fixes, warnings
 
 
+def _apply_case_d(lines, fix, exec_var):
+    """Atomically rebuild a Case D task (command under args.cmd).
+
+    Replaces the shell line + its args: block in one splice so line indices
+    never go stale mid-transformation. The migrated command moves into the
+    shell block after ``set -o pipefail``; any non-cmd args children (e.g.
+    ``executable:``) are preserved, and ``executable:`` is added when absent.
+    """
+    shell_idx = fix["line_idx"]
+    indent = fix["shell_indent"]
+    prefix = " " * indent
+    cprefix = " " * fix["content_indent"]
+    n = len(lines)
+
+    # Span the shell block body (indent > shell key) up to the next task key.
+    j = shell_idx + 1
+    while j < n and (lines[j].strip() == "" or leading_spaces(lines[j]) > indent):
+        j += 1
+
+    # Absorb the sibling args: block, if present, keeping its non-cmd children.
+    args_end = j
+    kept_children = []
+    has_exec = False
+    if j < n and leading_spaces(lines[j]) == indent and lines[j].strip().startswith("args:"):
+        k = j + 1
+        while k < n and (lines[k].strip() == "" or leading_spaces(lines[k]) > indent):
+            child = lines[k]
+            if child.strip():
+                if child.strip().startswith("cmd:"):
+                    pass  # migrated into the shell block
+                else:
+                    kept_children.append(child)
+                    if child.strip().startswith("executable:"):
+                        has_exec = True
+            k += 1
+        args_end = k
+
+    if not has_exec:
+        kept_children.append(cprefix + f'executable: "{{{{ {exec_var} }}}}"\n')
+
+    new_block = [
+        prefix + "ansible.builtin.shell: |" + fix.get("trailing_comment", "") + "\n",
+        cprefix + "set -o pipefail\n",
+        cprefix + fix["cmd_text"] + "\n",
+        prefix + "args:\n",
+    ]
+    new_block.extend(kept_children)
+    lines[shell_idx:args_end] = new_block
+    return lines
+
+
 def apply_fixes(lines, fixes, exec_var=DEFAULT_EXEC_VAR):
     """Apply all fixes in reverse order to preserve line indices."""
     for fix in sorted(fixes, key=lambda f: f["line_idx"], reverse=True):
         ind = fix["shell_indent"]
         prefix = " " * ind
+
+        # Case D is self-contained: rebuild the whole task region in one splice
+        # rather than layering the generic block/pipefail/args inserts (whose
+        # scan-time indices go stale once earlier inserts shift the lines).
+        if fix.get("type") == "D":
+            _apply_case_d(lines, fix, exec_var)
+            continue
 
         # --- Insert args: executable: block ---
         # Process this FIRST (higher index) before pipefail (lower index).
@@ -397,7 +455,7 @@ def apply_fixes(lines, fixes, exec_var=DEFAULT_EXEC_VAR):
 
         # --- Insert / convert for pipefail ---
         if fix.get("needs_pipefail"):
-            if fix["type"] in ("A", "D"):
+            if fix["type"] == "A":
                 insert_line = " " * fix["content_indent"] + "set -o pipefail\n"
                 lines.insert(fix["insert_idx"], insert_line)
 
@@ -415,27 +473,6 @@ def apply_fixes(lines, fixes, exec_var=DEFAULT_EXEC_VAR):
                     content_prefix + cmd + "\n",
                 ]
                 lines[fix["line_idx"]: fix["line_idx"] + 1] = replacement
-
-        # --- Migrate args.cmd into the shell block (Case D) ---
-        if fix.get("migrate_cmd"):
-            cmd_line_idx = fix["cmd_line_idx"]
-            cmd_text = fix["cmd_text"]
-            cindent = fix["content_indent"]
-            shell_idx = fix["line_idx"]
-
-            insert_at = shell_idx + 1
-            for j in range(shell_idx + 1, len(lines)):
-                if lines[j].lstrip().startswith("set -o pipefail"):
-                    insert_at = j + 1
-                    break
-                cind = leading_spaces(lines[j])
-                if cind <= fix["shell_indent"] and lines[j].strip().startswith("args:"):
-                    break
-
-            del lines[cmd_line_idx]
-            if cmd_line_idx < insert_at:
-                insert_at -= 1
-            lines.insert(insert_at, " " * cindent + cmd_text + "\n")
 
     return lines
 
@@ -563,10 +600,10 @@ def main():
                 if fix.get("migrate_cmd"):
                     parts.append("move args.cmd into shell block")
                 if fix.get("needs_pipefail"):
-                    if fix["type"] == "A":
-                        parts.append("insert pipefail")
-                    else:
+                    if fix["type"] == "B":
                         parts.append(f"convert inline ({fix['inline_cmd'][:50]!r})")
+                    else:
+                        parts.append("insert pipefail")
                 if not fix["has_args"]:
                     parts.append("add args:executable:")
                 print(f"  {rel}:{fix['line_idx'] + 1}  {' + '.join(parts)}")
