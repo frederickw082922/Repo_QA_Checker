@@ -24,6 +24,7 @@ Standalone Python scripts for detecting and auto-fixing common issues in [Ansibl
 | [`fix_ignore_errors.py`](#fix_ignore_errorspy) | `ignore_errors: true` → `failed_when: false` | `--fix` |
 | [`fix_loop_control.py`](#fix_loop_controlpy) | Loops missing `loop_control.label` | `--fix` |
 | [`fix_shell_pipefail.py`](#fix_shell_pipefailpy) | Missing `set -o pipefail` and `args: executable:` on `ansible.builtin.shell` tasks | `--dry-run` to preview |
+| [`check_shell_pipefail.py`](#check_shell_pipefailpy) | Same layout rules as `fix_shell_pipefail.py` (read-only report) | Report only |
 | [`check_tags_completeness.py`](#check_tags_completenesspy) | Tasks missing required tags (rule ID, level) | Report only |
 | [`check_audit_keys.py`](#check_audit_keyspy) | Duplicate keys in Goss audit templates | Report only |
 | [`check_template_headers.py`](#check_template_headerspy) | Missing `{{ file_managed_by_ansible }}` header | `--fix` |
@@ -417,6 +418,7 @@ python fix_shell_pipefail.py tasks/ --no-ansible-check                # Skip syn
 | A | Block format, has `args:`, missing `pipefail` | Insert `set -o pipefail` as first content line |
 | B | Inline format, missing `pipefail` | Convert to block scalar, add `set -o pipefail`, add `args:` if also missing |
 | C | Block format, has `pipefail`, missing `args:` | Append `args: executable:` block after shell content |
+| D | Command under `args.cmd` instead of shell block | Move `args.cmd` into block after `pipefail`; remove `args.cmd` |
 
 **What it adds/converts:**
 
@@ -448,6 +450,26 @@ ansible.builtin.shell: "cmd"  # noqa foo  ansible.builtin.shell: |  # noqa foo
 - `tasks_dir` -- path to `tasks/` directory (recurses `*.yml`)
 - `--exec-var NAME` -- variable for `args: executable:` (default: `default_shell_executable`)
 - `--no-ansible-check` -- skip `ansible-playbook --syntax-check` (useful in CI without Ansible installed)
+
+---
+
+### `check_shell_pipefail.py`
+
+Read-only checker for the same `ansible.builtin.shell` layout enforced by `fix_shell_pipefail.py`. Reuses its scanner so check and fix stay aligned.
+
+```bash
+python check_shell_pipefail.py /path/to/Private-RHEL10-CIS
+python check_shell_pipefail.py --all /path/to/CIS/Rhel
+python check_shell_pipefail.py --all /path/to/STIG --compact
+```
+
+**Reports:**
+- Missing `set -o pipefail` (or block scalar `|` indicator)
+- Missing `args: executable: "{{ <prefix>_shell_executable }}"`
+- `set -o pipefail` not first content line (warning)
+- `args.executable` present but not referencing the role's `*_shell_executable` variable
+
+Auto-detects `<prefix>_shell_executable` from `vars/main.yml` or `defaults/main.yml`. Exit code `1` when any issue is found.
 
 **Exit codes:** `0` = nothing to fix, `1` = fixes applied (or dry-run with findings), `2` = error.
 

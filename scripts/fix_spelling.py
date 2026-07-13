@@ -87,6 +87,15 @@ SPELL_EXCEPTIONS = {
 EXTENSIONS = {".yml", ".yaml", ".j2", ".md"}
 DEFAULT_SKIP_DIRS = {".git", ".github", "molecule", "__pycache__", ".ansible", "collections"}
 JINJA2_RE = re.compile(r"\{\{.*?\}\}")
+SKIP_FILENAMES = {"changelog.md", "CHANGELOG.md", "Changelog.md"}
+QA_ARTIFACT_BASENAME_RE = re.compile(
+    r"^(?:qa_report|AL_QA_Report_).*\.(?:md|html|json)$",
+    re.IGNORECASE,
+)
+
+
+def is_qa_artifact_basename(basename: str) -> bool:
+    return bool(QA_ARTIFACT_BASENAME_RE.match(basename))
 
 
 def find_files(repo_path, skip_dirs):
@@ -95,6 +104,10 @@ def find_files(repo_path, skip_dirs):
     for root, dirs, filenames in os.walk(repo_path):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
         for fname in filenames:
+            if fname in SKIP_FILENAMES:
+                continue
+            if is_qa_artifact_basename(fname):
+                continue
             if any(fname.endswith(ext) for ext in EXTENSIONS):
                 files.append(os.path.join(root, fname))
     return sorted(files)
