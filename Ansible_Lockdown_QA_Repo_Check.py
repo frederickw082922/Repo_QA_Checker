@@ -473,11 +473,16 @@ class RepoScanner:
 
     def collect_files(self, directory: str, extensions: Set[str],
                       exclude_dirs: Optional[Set[str]] = None) -> List[str]:
-        """Walk *directory* and return files with matching suffix (thread-safe cached)."""
+        """Walk *directory* and return files with matching suffix (thread-safe cached).
+
+        Always returns a fresh list copy so callers may mutate the result
+        (e.g. append a handlers file) without poisoning the shared cache for
+        later checks that read the same (directory, extensions) key.
+        """
         cache_key = f"{directory}|{'|'.join(sorted(extensions))}"
         with self._cache_lock:
             if cache_key in self._files_cache:
-                return self._files_cache[cache_key]
+                return list(self._files_cache[cache_key])
         if exclude_dirs is None:
             exclude_dirs = SKIP_DIRS
         result: List[str] = []
@@ -491,7 +496,7 @@ class RepoScanner:
         sorted_result = sorted(result)
         with self._cache_lock:
             self._files_cache.setdefault(cache_key, sorted_result)
-            return self._files_cache[cache_key]
+            return list(self._files_cache[cache_key])
 
     # -- metadata helpers ---------------------------------------------------
 
@@ -1374,6 +1379,12 @@ class AuditTemplateCheck:
         loop_depth = 0
         cond_stack: list = []
         cond_counter = 0
+        # Track YAML sequence items so that the same key in two sibling
+        # list elements (e.g. `fingerprint:` under two `- name:` gpg_key
+        # entries) is not reported as a duplicate. Each `- ` marker opens a
+        # new item scope keyed by its indentation.
+        list_stack: list = []  # list of (marker_indent, item_id)
+        list_counter = 0
         for num, raw in enumerate(lines, 1):
             s = raw.strip()
             if not s or s.startswith("#"):
@@ -1403,11 +1414,22 @@ class AuditTemplateCheck:
             # Skip keys inside for-loops (expected repeats)
             if loop_depth > 0:
                 continue
+            indent = len(raw) - len(raw.lstrip())
+            # A new sequence item (`- ...`) opens its own scope. Close any
+            # sibling/enclosing items at the same or deeper indent first.
+            if s.startswith("- "):
+                list_stack = [it for it in list_stack if it[0] < indent]
+                list_counter += 1
+                list_stack.append((indent, list_counter))
+                continue
+            # A plain key closes any list items it has dedented out of.
+            list_stack = [it for it in list_stack if it[0] < indent]
             key_m = re.match(r"^(\w[\w.]*)\s*:", s)
             if key_m:
                 key = key_m.group(1)
                 scope = tuple(cond_stack)
-                lookup = (key, scope)
+                list_scope = tuple(item_id for _, item_id in list_stack)
+                lookup = (key, scope, list_scope)
                 if lookup in seen:
                     findings.append(Finding(
                         rel_path, num,
