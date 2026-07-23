@@ -13,6 +13,10 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 - **`check_shell_pipefail.py`:** Read-only checker (stdlib only) for `ansible.builtin.shell` layout: `set -o pipefail` as first block line plus `args: executable: "{{ <prefix>_shell_executable }}"`. Reuses `fix_shell_pipefail.scan_file` so rules match the fix script. Auto-detects `*_shell_executable` from role vars. Supports `--all` / `--compact` batch mode. Wired in `run_all_checks.sh` and `Ansible_Lockdown_QA_Repo_Check.py` (`--skip shell_pipefail` / `--only shell_pipefail`).
 - **QA Repo Check: Shell Pipefail Layout (`shell_pipefail`):** New check in `Ansible_Lockdown_QA_Repo_Check.py` that delegates to `check_shell_pipefail.py` and surfaces findings in the main QA report (Markdown/HTML/JSON/console).
 
+### Changed
+
+- **Audit Variable Placement is now advisory (warnings only):** every finding from this check is reported as a warning, so it can only ever be PASS or WARN, never FAIL. Variable placement (user-overridable toggles in `defaults/main.yml` vs role-internal constants in `vars/audit.yml`) is guidance rather than a hard gate. In `check_audit_vars.py` the four `error`-severity findings (CHECK A overridable-var-in-`vars/audit.yml`, CHECK C molecule-override-ignored, duplicate-definition, and the `defaults/main.yml` not-found structural check) are downgraded to `warning`, so the standalone CLI and `--all` batch mode now exit 0 on placement findings. In the main report, `AuditVarsCheck` surfaces every finding as a warning and derives WARN/PASS directly, so the check stays advisory even if source severities drift.
+
 ### Fixed
 
 - **QA report artifact exclusion:** Spell, grammar, and company-naming checks no longer scan prior `qa_report_*` or `AL_QA_Report_*` files left in role directories. All existing report artifacts in the role root are auto-added to `exclude_paths` at scan start (not only the current run's output file). `fix_grammar.py` and `fix_spelling.py` apply the same skip pattern.

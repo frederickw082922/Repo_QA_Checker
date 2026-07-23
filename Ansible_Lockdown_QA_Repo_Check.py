@@ -1500,20 +1500,18 @@ class AuditVarsCheck:
         for issue in report.issues:
             if issue.severity == "info":
                 continue
+            # Audit variable placement is advisory guidance, not a hard gate:
+            # surface every finding as a warning so the check can only ever
+            # be PASS or WARN, never FAIL (even if the source severities drift).
             findings.append(Finding(
                 file=issue.file or "defaults/main.yml",
                 line=issue.line,
                 description=f"CHECK {issue.check}: {issue.message}",
-                severity=issue.severity,
+                severity="warning",
                 check_name="audit_vars",
             ))
 
-        if report.errors:
-            status = "FAIL"
-        elif report.warnings:
-            status = "WARN"
-        else:
-            status = "PASS"
+        status = "WARN" if findings else "PASS"
         return CheckResult(
             self.display_name, status, findings,
             f"{len(findings)} issue(s)",

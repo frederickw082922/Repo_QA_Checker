@@ -172,7 +172,7 @@ def check_role(role_path: str) -> RoleReport:
     if defaults_lines is None:
         report.issues.append(Issue(
             check="structure",
-            severity="error",
+            severity="warning",
             message="defaults/main.yml not found",
             file="defaults/main.yml",
         ))
@@ -206,7 +206,7 @@ def check_role(role_path: str) -> RoleReport:
     for name in sorted(DEFAULTS_VARS & set(audit_keys)):
         report.issues.append(Issue(
             check="A",
-            severity="error",
+            severity="warning",
             message=(
                 f"{name} in vars/audit.yml "
                 "(move to defaults/main.yml; molecule cannot override role vars)"
@@ -232,7 +232,7 @@ def check_role(role_path: str) -> RoleReport:
     for name in sorted(DEFAULTS_VARS & set(defaults_keys) & set(audit_keys)):
         report.issues.append(Issue(
             check="dup",
-            severity="error",
+            severity="warning",
             message=(
                 f"{name} defined in both defaults/main.yml and vars/audit.yml "
                 "(vars wins; defaults entry is dead)"
@@ -247,7 +247,7 @@ def check_role(role_path: str) -> RoleReport:
         locations = ", ".join(molecule_refs[name])
         report.issues.append(Issue(
             check="C",
-            severity="error",
+            severity="warning",
             message=(
                 f"{name} in vars/audit.yml and molecule ({locations}); "
                 "molecule override is ignored"
