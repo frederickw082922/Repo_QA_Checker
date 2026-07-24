@@ -39,9 +39,19 @@ Options:
   --exec-var NAME       Variable name for args: executable: (default: default_shell_executable)
   --no-ansible-check    Skip ansible-playbook --syntax-check (for CI without Ansible)
 
+A folded ('>') block scalar can never correctly host 'set -o pipefail': the
+newline after pipefail folds to a space, so pipefail runs with the following
+command as positional args and never applies. When such a task needs pipefail,
+the shell line is rewritten to literal '|' -- but only when the command body is
+a single physical line. A multi-line folded body is left untouched with a WARN
+(auto-converting to '|' would reinterpret space-joined lines as separate
+commands).
+
 Warnings (not auto-fixed):
   WARN  file:line  set -o pipefail present but not first content line
     pipefail must be the first command for it to apply to all piped commands.
+  WARN  file:line  folded '>' shell scalar with a multi-line body
+    Convert to literal '|' by hand before adding pipefail.
 
 Exit codes:
   0  No changes needed (or dry-run with 0 findings)
@@ -253,7 +263,15 @@ def scan_file(filepath, exec_var=DEFAULT_EXEC_VAR):
         m = BLOCK_RE.match(line)
         if m:
             shell_indent = len(m.group(1))
-            has_block_indicator = bool(m.group(2))
+            indicator = m.group(2)  # None | '|[-+]' | '>[-+]'
+            is_folded = bool(indicator) and indicator[0] == ">"
+            # A folded ('>') scalar is NOT a valid host for 'set -o pipefail':
+            # under '>' the newline after pipefail folds to a space, so
+            # 'set -o pipefail' runs with the following command as positional
+            # args and never applies. Treat '>' as "no valid indicator" so the
+            # line is rewritten to literal '|' (see the folded-body guard below
+            # for the multi-line case that can't be auto-converted safely).
+            has_block_indicator = bool(indicator) and indicator[0] == "|"
             trailing_comment = m.group(3) or ""
             # Scan forward for block content
             j = i + 1
@@ -283,6 +301,21 @@ def scan_file(filepath, exec_var=DEFAULT_EXEC_VAR):
             body_commands = collect_shell_body_commands(lines, i, shell_indent)
             has_shell_command = task_has_shell_command(body_commands)
             args_cmd = find_args_cmd(lines, i, shell_indent)
+
+            # Converting a folded '>' scalar to literal '|' is only safe when the
+            # command body is a single physical line (excluding an existing
+            # pipefail line): '|' preserves newlines, so a multi-physical-line
+            # folded body that relies on space-joining would be reinterpreted as
+            # separate commands. Auto-convert the single-line case; warn (do not
+            # touch) the multi-line case so a human converts it deliberately.
+            if is_folded:
+                non_pipefail_body = [
+                    c for c in body_commands if not c.startswith("set -o pipefail")
+                ]
+                if len(non_pipefail_body) > 1:
+                    warnings.append({"type": "folded_multiline", "line_idx": i})
+                    i += 1
+                    continue
 
             if pipefail_misplaced:
                 warnings.append({"type": "pipefail_misplaced", "line_idx": i})
@@ -578,10 +611,18 @@ def main():
             continue
 
         for w in warnings:
-            print(
-                f"  WARN  {rel}:{w['line_idx'] + 1}  "
-                "set -o pipefail present but not first content line (manual fix needed)"
-            )
+            if w["type"] == "folded_multiline":
+                print(
+                    f"  WARN  {rel}:{w['line_idx'] + 1}  "
+                    "folded '>' shell scalar with a multi-line body -- convert to "
+                    "literal '|' by hand before adding pipefail (auto-convert unsafe: "
+                    "'|' preserves newlines, changing folded command semantics)"
+                )
+            else:
+                print(
+                    f"  WARN  {rel}:{w['line_idx'] + 1}  "
+                    "set -o pipefail present but not first content line (manual fix needed)"
+                )
 
         if not fixes:
             continue
