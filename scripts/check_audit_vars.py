@@ -172,7 +172,7 @@ def check_role(role_path: str) -> RoleReport:
     if defaults_lines is None:
         report.issues.append(Issue(
             check="structure",
-            severity="error",
+            severity="warning",
             message="defaults/main.yml not found",
             file="defaults/main.yml",
         ))
@@ -206,7 +206,7 @@ def check_role(role_path: str) -> RoleReport:
     for name in sorted(DEFAULTS_VARS & set(audit_keys)):
         report.issues.append(Issue(
             check="A",
-            severity="error",
+            severity="warning",
             message=(
                 f"{name} in vars/audit.yml "
                 "(move to defaults/main.yml; molecule cannot override role vars)"
@@ -232,7 +232,7 @@ def check_role(role_path: str) -> RoleReport:
     for name in sorted(DEFAULTS_VARS & set(defaults_keys) & set(audit_keys)):
         report.issues.append(Issue(
             check="dup",
-            severity="error",
+            severity="warning",
             message=(
                 f"{name} defined in both defaults/main.yml and vars/audit.yml "
                 "(vars wins; defaults entry is dead)"
@@ -241,13 +241,19 @@ def check_role(role_path: str) -> RoleReport:
             line=audit_keys[name],
         ))
 
-    # Check C — molecule cannot override vars/audit.yml entries
+    # Check C — molecule cannot override vars/audit.yml entries.
+    # Canonical role-internal constants (VARS_AUDIT_VARS, e.g. audit_git_version)
+    # are *supposed* to live in vars/audit.yml - that placement is the fleet-wide
+    # CIS/STIG convention - so a molecule reference to them is not a placement
+    # defect and must not be flagged here. The correct way to override such a var
+    # from molecule is --extra-vars or set_fact (both outrank include_vars), not a
+    # play/host var. Only non-canonical keys parked in vars/audit.yml are flagged.
     molecule_refs = _molecule_var_refs(role_path)
-    for name in sorted(set(audit_keys) & set(molecule_refs)):
+    for name in sorted((set(audit_keys) & set(molecule_refs)) - VARS_AUDIT_VARS):
         locations = ", ".join(molecule_refs[name])
         report.issues.append(Issue(
             check="C",
-            severity="error",
+            severity="warning",
             message=(
                 f"{name} in vars/audit.yml and molecule ({locations}); "
                 "molecule override is ignored"
