@@ -62,6 +62,10 @@ def extract_keys(filepath):
     # {% elif %} / {% else %} bump the branch counter, {% endif %} pops
     cond_stack = []
     cond_counter = 0
+    # Stack of YAML sequence-item scopes as (marker_indent, item_id) so the
+    # same key in two sibling list elements is not treated as a duplicate.
+    list_stack = []
+    list_counter = 0
 
     with open(filepath, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f, 1):
@@ -90,27 +94,37 @@ def extract_keys(filepath):
                         cond_stack.pop()
                     continue
 
-            # Skip comments, Jinja2 expressions, list items
+            # Skip comments, Jinja2 expressions
             if stripped.startswith('#') or stripped.startswith('{%'):
                 continue
             if stripped.startswith('{{') and ':' not in stripped:
                 continue
+
+            indent = len(line) - len(line.lstrip())
+            # A new sequence item opens its own scope; close siblings and
+            # enclosing items at the same or deeper indent first.
             if stripped.startswith('- '):
+                list_stack = [it for it in list_stack if it[0] < indent]
+                list_counter += 1
+                list_stack.append((indent, list_counter))
                 continue
+            # A plain key closes any list items it has dedented out of.
+            list_stack = [it for it in list_stack if it[0] < indent]
 
             match = key_pattern.match(line)
             if match:
-                indent = len(match.group(1))
                 key_name = match.group(2)
                 # Build a scope key from the conditional stack so that
                 # keys in different if/else branches don't clash
                 cond_scope = tuple(cond_stack) if cond_stack else ()
+                list_scope = tuple(item_id for _, item_id in list_stack)
                 keys.append({
                     'key': key_name,
                     'indent': indent,
                     'line': line_num,
                     'in_loop': loop_depth > 0,
                     'cond_scope': cond_scope,
+                    'list_scope': list_scope,
                     'raw': line.rstrip(),
                 })
 
@@ -131,9 +145,11 @@ def find_duplicates(keys):
         if entry['in_loop']:
             continue
 
-        # Include the conditional scope in the lookup so that keys
-        # in different if/else branches don't conflict
-        lookup = (entry['indent'], entry['key'], entry.get('cond_scope', ()))
+        # Include the conditional scope and list-item scope in the lookup
+        # so that keys in different if/else branches or in different YAML
+        # sequence items don't conflict
+        lookup = (entry['indent'], entry['key'],
+                  entry.get('cond_scope', ()), entry.get('list_scope', ()))
 
         if lookup in seen:
             issues.append({

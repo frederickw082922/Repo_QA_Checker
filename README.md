@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.7.0
+**Version:** 2.8.1
 
 ---
 
@@ -29,7 +29,7 @@ Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/a
 
 ## Overview
 
-`Ansible_Lockdown_QA_Repo_Check.py` is a single-file Python tool that runs 11 quality checks against any Ansible-Lockdown role repository. It validates YAML syntax, Ansible best practices, spelling, grammar, variable usage, naming conventions, FQCN compliance, rule coverage, and more.
+`Ansible_Lockdown_QA_Repo_Check.py` is a single-file Python tool that runs 15 quality checks against any Ansible-Lockdown role repository. It validates YAML syntax, Ansible best practices, spelling, grammar, variable usage, naming conventions, FQCN compliance, rule coverage, and more.
 
 Key features:
 
@@ -132,7 +132,7 @@ When `-d` is not specified, the tool resolves the role directory in this order:
 
 ## Checks
 
-The tool runs 11 independent checks. Each produces a status of **PASS**, **FAIL**, **WARN**, or **SKIP**.
+The tool runs 15 independent checks. Each produces a status of **PASS**, **FAIL**, **WARN**, or **SKIP**.
 
 | # | Check Name | `--skip` Key | What It Does |
 |---|-----------|--------------|--------------|
@@ -144,9 +144,13 @@ The tool runs 11 independent checks. Each produces a status of **PASS**, **FAIL*
 | 6 | **Variable Naming** | `var_naming` | Validates `register:` variable prefixes, detects duplicate register names (with mutually exclusive `when:` suppression), and duplicate defaults. |
 | 7 | **File Mode Quoting** | `file_mode` | Flags unquoted numeric `mode:` values (e.g., `mode: 0644` should be `mode: '0644'`). |
 | 8 | **Company Naming** | `company_naming` | Detects outdated company name references (configurable). |
-| 9 | **Audit Template** | `audit_template` | Checks `templates/ansible_vars_goss.yml.j2` for duplicate keys. |
-| 10 | **FQCN Usage** | `fqcn` | Detects bare (non-FQCN) Ansible built-in module names (e.g., `command:` should be `ansible.builtin.command:`). |
-| 11 | **Rule Coverage** | `rule_coverage` | Cross-references rule toggle variables in `defaults/main.yml` against task `when:` conditions to find orphaned or missing rules. Auto-detects CIS (`{prefix}_rule_X_X_X`) vs STIG (`{prefix}_XXXXXX`) toggle patterns. |
+| 9 | **Meta Validate** | `meta_validate` | Checks `meta/main.yml` for author, company, and `min_ansible_version`. |
+| 10 | **Audit Template** | `audit_template` | Checks `templates/lockdown_audit.yml.j2` and `templates/ansible_vars_goss.yml.j2` for duplicate keys. |
+| 11 | **Audit Variable Placement** | `audit_vars` | Validates audit variable placement between `defaults/main.yml` (user-overridable toggles) and `vars/audit.yml` (role-internal constants). Delegates to `scripts/check_audit_vars.py`. |
+| 12 | **Shell Pipefail Layout** | `shell_pipefail` | Validates `ansible.builtin.shell` tasks for `set -o pipefail` and `args: executable:`. Delegates to `scripts/check_shell_pipefail.py`. |
+| 13 | **FQCN Usage** | `fqcn` | Detects bare (non-FQCN) Ansible built-in module names (e.g., `command:` should be `ansible.builtin.command:`). |
+| 14 | **Manual Warn Count** | `manual_warn` | Checks that manual-remediation tasks include the `warning_facts.yml` Warn Count block. |
+| 15 | **Rule Coverage** | `rule_coverage` | Cross-references rule toggle variables in `defaults/main.yml` against task `when:` conditions to find orphaned or missing rules. Auto-detects CIS (`{prefix}_rule_X_X_X`) vs STIG (`{prefix}_XXXXXX`) toggle patterns. |
 
 ### Skipping Checks
 
@@ -427,7 +431,7 @@ Add the following to your Ansible role's `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.7.0  # pin to a release tag
+  rev: v2.8.1  # pin to a release tag
   hooks:
     - id: ansible-lockdown-qa
 ```
@@ -440,7 +444,7 @@ You can override the default `args` in your `.pre-commit-config.yaml`:
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.7.0
+  rev: v2.8.1
   hooks:
     - id: ansible-lockdown-qa
       args: ['-d', '.', '--console', '--no-report', '--skip', 'grammar']
@@ -452,7 +456,7 @@ By default, the `yamllint` and `ansible-lint` checks are skipped gracefully when
 
 ```yaml
 - repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.7.0
+  rev: v2.8.1
   hooks:
     - id: ansible-lockdown-qa
       additional_dependencies: ['yamllint', 'ansible-lint']

@@ -27,6 +27,24 @@ from collections import Counter
 
 SKIP_DIRS = {".git", "__pycache__", ".github", "collections", "molecule"}
 
+# Lockdown-convention orchestration files. Tasks in these files use
+# include_tasks/import_tasks/set_fact for play wiring (not rule remediation),
+# so they don't need rule-ID tags. Matched by basename so per-category
+# tasks/Cat?/main.yml is covered alongside tasks/main.yml.
+ORCHESTRATION_FILES = {
+    "main.yml",
+    "LE_audit_setup.yml",
+    "audit_only.yml",
+    "auditd.yml",
+    "check_prereqs.yml",
+    "fetch_audit_output.yml",
+    "parse_etc_password.yml",
+    "post_remediation_audit.yml",
+    "pre_remediation_audit.yml",
+    "prelim.yml",
+    "warning_facts.yml",
+}
+
 
 def detect_benchmark_type(repo_path):
     """Auto-detect benchmark type and prefix from defaults/main.yml."""
@@ -239,11 +257,18 @@ def check_task_tags(task, benchmark_type, prefix, require_level, require_severit
         r"Fetch\s+audit|Show\s+Audit|Output\s+Warning|"
         r"POST\s*\|\s*(flush|reboot|FETCH))\b",
         task["name"], re.IGNORECASE))
+    # File-level skip: tasks living in Lockdown-convention orchestration
+    # files are play wiring, not rule remediation. The name-pattern checks
+    # above only cover a subset of phrasings ("Run Cat 2 STIG 21xxxx tasks",
+    # "Audit_Only | ...", etc. are missed) so we additionally allowlist
+    # the file basename.
+    is_orchestration_file = (
+        os.path.basename(task["file"]) in ORCHESTRATION_FILES)
 
     if not task["has_tags"]:
         # Section includes and infra tasks don't need tags — they use
         # import_tasks which inherits tags from the imported file
-        if is_section_include or is_infra_task:
+        if is_section_include or is_infra_task or is_orchestration_file:
             return issues  # no issue
         # Sub-tasks inside a block: inherit tags from the parent block
         if task.get("in_tagged_block"):
@@ -261,7 +286,8 @@ def check_task_tags(task, benchmark_type, prefix, require_level, require_severit
     # Check for rule ID tag — skip for infrastructure tasks
     # (tagged "always", section includes, infra orchestration tasks)
     if not is_prelim and "always" not in tags_lower \
-            and not is_section_include and not is_infra_task:
+            and not is_section_include and not is_infra_task \
+            and not is_orchestration_file:
         has_rule_id = False
         if benchmark_type == "cis":
             has_rule_id = any(re.match(r"rule_[\d_]+", t) for t in tags_lower)

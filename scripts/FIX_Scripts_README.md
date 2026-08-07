@@ -23,6 +23,8 @@ Standalone Python scripts for detecting and auto-fixing common issues in [Ansibl
 | [`check_var_naming.py`](#check_var_namingpy) | Register prefixes, duplicates, fwd/reverse | Report only |
 | [`fix_ignore_errors.py`](#fix_ignore_errorspy) | `ignore_errors: true` → `failed_when: false` | `--fix` |
 | [`fix_loop_control.py`](#fix_loop_controlpy) | Loops missing `loop_control.label` | `--fix` |
+| [`fix_shell_pipefail.py`](#fix_shell_pipefailpy) | Missing `set -o pipefail` and `args: executable:` on `ansible.builtin.shell` tasks | `--dry-run` to preview |
+| [`check_shell_pipefail.py`](#check_shell_pipefailpy) | Same layout rules as `fix_shell_pipefail.py` (read-only report) | Report only |
 | [`check_tags_completeness.py`](#check_tags_completenesspy) | Tasks missing required tags (rule ID, level) | Report only |
 | [`check_audit_keys.py`](#check_audit_keyspy) | Duplicate keys in Goss audit templates | Report only |
 | [`check_template_headers.py`](#check_template_headerspy) | Missing `{{ file_managed_by_ansible }}` header | `--fix` |
@@ -393,6 +395,83 @@ python fix_loop_control.py /path/to/role --fix --label '"{{ item.name }}"'  # Cu
 **Default labels:** `"{{ item }}"` for most loops, `"{{ item.key }}"` for `with_dict:`.
 
 **Scans:** `tasks/` and `handlers/`. Detects both `loop:` and all `with_*:` variants. Handles the case where `loop_control:` exists but has no `label:` key.
+
+---
+
+### `fix_shell_pipefail.py`
+
+Finds `ansible.builtin.shell` tasks missing `set -o pipefail` or `args: executable:` and fixes them. Without `set -o pipefail`, pipe failures are silently ignored. Without `args: executable:`, Ansible falls back to `/bin/sh` (dash on SUSE/Alpine), which does not support `pipefail`.
+
+**Note:** this script applies fixes by default. Pass `--dry-run` to preview without writing.
+
+```bash
+python fix_shell_pipefail.py tasks/                                   # Apply fixes
+python fix_shell_pipefail.py tasks/ --dry-run                         # Preview only
+python fix_shell_pipefail.py tasks/ --exec-var my_shell_var           # Custom exec variable
+python fix_shell_pipefail.py tasks/ --no-ansible-check                # Skip syntax check (CI)
+```
+
+**Three fix cases:**
+
+| Case | Condition | Fix Applied |
+|------|-----------|-------------|
+| A | Block format, has `args:`, missing `pipefail` | Insert `set -o pipefail` as first content line |
+| B | Inline format, missing `pipefail` | Convert to block scalar, add `set -o pipefail`, add `args:` if also missing |
+| C | Block format, has `pipefail`, missing `args:` | Append `args: executable:` block after shell content |
+| D | Command under `args.cmd` instead of shell block | Move `args.cmd` into block after `pipefail`; remove `args.cmd` |
+
+**What it adds/converts:**
+
+```yaml
+# Before (Case B -- inline)               # After
+- name: Check pipes
+  ansible.builtin.shell: cmd | grep foo   - name: Check pipes
+                                            ansible.builtin.shell: |
+                                              set -o pipefail
+                                              cmd | grep foo
+                                            args:
+                                              executable: "{{ default_shell_executable }}"
+```
+
+Trailing `# noqa` comments on inline lines are preserved on the `|` indicator:
+
+```yaml
+# Before                                  # After
+ansible.builtin.shell: "cmd"  # noqa foo  ansible.builtin.shell: |  # noqa foo
+                                             set -o pipefail
+                                             cmd
+```
+
+**Validation:** After each fix, runs `yamllint` (relaxed mode) and optionally `ansible-playbook --syntax-check` via a temporary playbook. Files that fail either check are reverted to their original content.
+
+**Warning (not auto-fixed):** If `set -o pipefail` is present but is not the first content line, the script emits `WARN file:line set -o pipefail present but not first content line` and skips the task. `pipefail` must be first to apply to all piped commands.
+
+**Arguments:**
+- `tasks_dir` -- path to `tasks/` directory (recurses `*.yml`)
+- `--exec-var NAME` -- variable for `args: executable:` (default: `default_shell_executable`)
+- `--no-ansible-check` -- skip `ansible-playbook --syntax-check` (useful in CI without Ansible installed)
+
+---
+
+### `check_shell_pipefail.py`
+
+Read-only checker for the same `ansible.builtin.shell` layout enforced by `fix_shell_pipefail.py`. Reuses its scanner so check and fix stay aligned.
+
+```bash
+python check_shell_pipefail.py /path/to/Private-RHEL10-CIS
+python check_shell_pipefail.py --all /path/to/CIS/Rhel
+python check_shell_pipefail.py --all /path/to/STIG --compact
+```
+
+**Reports:**
+- Missing `set -o pipefail` (or block scalar `|` indicator)
+- Missing `args: executable: "{{ <prefix>_shell_executable }}"`
+- `set -o pipefail` not first content line (warning)
+- `args.executable` present but not referencing the role's `*_shell_executable` variable
+
+Auto-detects `<prefix>_shell_executable` from `vars/main.yml` or `defaults/main.yml`. Exit code `1` when any issue is found.
+
+**Exit codes:** `0` = nothing to fix, `1` = fixes applied (or dry-run with findings), `2` = error.
 
 ---
 

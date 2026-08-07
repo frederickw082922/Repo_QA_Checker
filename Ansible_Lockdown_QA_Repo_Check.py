@@ -16,6 +16,7 @@ import argparse
 import concurrent.futures
 import datetime
 import html as html_mod
+import importlib.util
 import json
 import os
 import re
@@ -29,7 +30,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.7.0"
+TOOL_VERSION = "2.8.1"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -260,9 +261,31 @@ TASK_KEYWORDS: Set[str] = {
 # Directories / patterns to skip when walking the repo
 SKIP_DIRS: Set[str] = {".git", "__pycache__", ".github", "collections"}
 
+# Prior QA report artifacts left in role directories (not role source)
+QA_ARTIFACT_BASENAME_RE = re.compile(
+    r"^(?:qa_report|AL_QA_Report_).*\.(?:md|html|json)$",
+    re.IGNORECASE,
+)
+
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
+
+def is_qa_artifact_basename(basename: str) -> bool:
+    """Return True if *basename* is a generated QA report file."""
+    return bool(QA_ARTIFACT_BASENAME_RE.match(basename))
+
+
+def discover_qa_artifact_paths(directory: str) -> Set[str]:
+    """Return absolute paths to QA report artifacts in *directory* (non-recursive)."""
+    paths: Set[str] = set()
+    if not os.path.isdir(directory):
+        return paths
+    for fname in os.listdir(directory):
+        if is_qa_artifact_basename(fname):
+            paths.add(os.path.abspath(os.path.join(directory, fname)))
+    return paths
+
 
 def _relpath(filepath: str, base: str) -> str:
     """Return a clean relative path for display."""
@@ -450,11 +473,16 @@ class RepoScanner:
 
     def collect_files(self, directory: str, extensions: Set[str],
                       exclude_dirs: Optional[Set[str]] = None) -> List[str]:
-        """Walk *directory* and return files with matching suffix (thread-safe cached)."""
+        """Walk *directory* and return files with matching suffix (thread-safe cached).
+
+        Always returns a fresh list copy so callers may mutate the result
+        (e.g. append a handlers file) without poisoning the shared cache for
+        later checks that read the same (directory, extensions) key.
+        """
         cache_key = f"{directory}|{'|'.join(sorted(extensions))}"
         with self._cache_lock:
             if cache_key in self._files_cache:
-                return self._files_cache[cache_key]
+                return list(self._files_cache[cache_key])
         if exclude_dirs is None:
             exclude_dirs = SKIP_DIRS
         result: List[str] = []
@@ -468,7 +496,7 @@ class RepoScanner:
         sorted_result = sorted(result)
         with self._cache_lock:
             self._files_cache.setdefault(cache_key, sorted_result)
-            return self._files_cache[cache_key]
+            return list(self._files_cache[cache_key])
 
     # -- metadata helpers ---------------------------------------------------
 
@@ -554,6 +582,8 @@ class RepoScanner:
             ("company_naming",  CompanyNamingCheck),
             ("meta_validate",   MetaValidateCheck),
             ("audit_template",  AuditTemplateCheck),
+            ("audit_vars",      AuditVarsCheck),
+            ("shell_pipefail",  ShellPipefailCheck),
             ("fqcn",            FQCNCheck),
             ("manual_warn",     ManualWarnCountCheck),
             ("rule_coverage",   RuleCoverageCheck),
@@ -814,7 +844,7 @@ class GrammarCheck:
             basename = os.path.basename(fp)
             if is_md and basename in self._SKIP_MD_BASENAMES:
                 continue
-            if is_md and basename.startswith("qa_report") and basename.endswith(".md"):
+            if is_qa_artifact_basename(basename):
                 continue
             if basename == "aide.conf.j2":
                 continue
@@ -1334,21 +1364,27 @@ class MetaValidateCheck:
 class AuditTemplateCheck:
     display_name = "Audit Template"
 
+    BRIDGE_TEMPLATES = (
+        "lockdown_audit.yml.j2",
+        "ansible_vars_goss.yml.j2",
+    )
+
     def __init__(self, scanner: RepoScanner):
         self.scanner = scanner
 
-    def run(self) -> CheckResult:
+    def _scan_template(self, rel_path: str,
+                       lines: List[str]) -> List[Finding]:
         findings: List[Finding] = []
-        tmpl = os.path.join(self.scanner.directory, "templates",
-                            "ansible_vars_goss.yml.j2")
-        if not os.path.isfile(tmpl):
-            return CheckResult(self.display_name, "SKIP",
-                               summary="Goss audit template not found")
-        lines = self.scanner.read_lines(tmpl)
         seen: Dict[tuple, int] = {}
         loop_depth = 0
         cond_stack: list = []
         cond_counter = 0
+        # Track YAML sequence items so that the same key in two sibling
+        # list elements (e.g. `fingerprint:` under two `- name:` gpg_key
+        # entries) is not reported as a duplicate. Each `- ` marker opens a
+        # new item scope keyed by its indentation.
+        list_stack: list = []  # list of (marker_indent, item_id)
+        list_counter = 0
         for num, raw in enumerate(lines, 1):
             s = raw.strip()
             if not s or s.startswith("#"):
@@ -1378,22 +1414,164 @@ class AuditTemplateCheck:
             # Skip keys inside for-loops (expected repeats)
             if loop_depth > 0:
                 continue
+            indent = len(raw) - len(raw.lstrip())
+            # A new sequence item (`- ...`) opens its own scope. Close any
+            # sibling/enclosing items at the same or deeper indent first.
+            if s.startswith("- "):
+                list_stack = [it for it in list_stack if it[0] < indent]
+                list_counter += 1
+                list_stack.append((indent, list_counter))
+                continue
+            # A plain key closes any list items it has dedented out of.
+            list_stack = [it for it in list_stack if it[0] < indent]
             key_m = re.match(r"^(\w[\w.]*)\s*:", s)
             if key_m:
                 key = key_m.group(1)
                 scope = tuple(cond_stack)
-                lookup = (key, scope)
+                list_scope = tuple(item_id for _, item_id in list_stack)
+                lookup = (key, scope, list_scope)
                 if lookup in seen:
                     findings.append(Finding(
-                        "templates/ansible_vars_goss.yml.j2", num,
+                        rel_path, num,
                         f"Duplicate audit key '{key}' "
                         f"(first at line {seen[lookup]})",
                         "warning", "audit_template"))
                 else:
                     seen[lookup] = num
+        return findings
+
+    def run(self) -> CheckResult:
+        findings: List[Finding] = []
+        templates_dir = os.path.join(self.scanner.directory, "templates")
+        scanned: List[str] = []
+
+        for name in self.BRIDGE_TEMPLATES:
+            rel_path = os.path.join("templates", name)
+            tmpl = os.path.join(templates_dir, name)
+            if not os.path.isfile(tmpl):
+                continue
+            scanned.append(name)
+            findings.extend(
+                self._scan_template(rel_path, self.scanner.read_lines(tmpl)))
+
+        if not scanned:
+            return CheckResult(self.display_name, "SKIP",
+                               summary="Goss audit bridge template not found")
+
         status = "PASS" if not findings else "FAIL"
-        return CheckResult(self.display_name, status, findings,
-                           f"{len(findings)} issue(s)")
+        summary = f"{len(findings)} issue(s) in {', '.join(scanned)}"
+        return CheckResult(self.display_name, status, findings, summary)
+
+
+def _load_check_audit_vars_module():
+    """Import scripts/check_audit_vars.py without installing a package."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "scripts",
+        "check_audit_vars.py",
+    )
+    spec = importlib.util.spec_from_file_location("_check_audit_vars", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load audit vars checker from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class AuditVarsCheck:
+    """Validate audit variable placement (defaults vs vars/audit.yml)."""
+    display_name = "Audit Variable Placement"
+
+    def __init__(self, scanner: RepoScanner):
+        self.scanner = scanner
+
+    def run(self) -> CheckResult:
+        try:
+            checker = _load_check_audit_vars_module()
+        except ImportError as exc:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary=f"Audit vars checker unavailable: {exc}",
+            )
+
+        report = checker.check_role(self.scanner.directory)
+        findings: List[Finding] = []
+        for issue in report.issues:
+            if issue.severity == "info":
+                continue
+            # Audit variable placement is advisory guidance, not a hard gate:
+            # surface every finding as a warning so the check can only ever
+            # be PASS or WARN, never FAIL (even if the source severities drift).
+            findings.append(Finding(
+                file=issue.file or "defaults/main.yml",
+                line=issue.line,
+                description=f"CHECK {issue.check}: {issue.message}",
+                severity="warning",
+                check_name="audit_vars",
+            ))
+
+        status = "WARN" if findings else "PASS"
+        return CheckResult(
+            self.display_name, status, findings,
+            f"{len(findings)} issue(s)",
+        )
+
+
+def _load_check_shell_pipefail_module():
+    """Import scripts/check_shell_pipefail.py without installing a package."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "scripts",
+        "check_shell_pipefail.py",
+    )
+    spec = importlib.util.spec_from_file_location("_check_shell_pipefail", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load shell pipefail checker from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class ShellPipefailCheck:
+    """Validate ansible.builtin.shell pipefail and args.executable layout."""
+    display_name = "Shell Pipefail Layout"
+
+    def __init__(self, scanner: RepoScanner):
+        self.scanner = scanner
+
+    def run(self) -> CheckResult:
+        try:
+            checker = _load_check_shell_pipefail_module()
+            scan_mod = checker._load_scan_module()
+        except ImportError as exc:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary=f"Shell pipefail checker unavailable: {exc}",
+            )
+
+        report = checker.check_role(self.scanner.directory, scan_mod)
+        findings: List[Finding] = []
+        for issue in report.issues:
+            findings.append(Finding(
+                file=issue.file or "tasks/",
+                line=issue.line,
+                description=issue.message,
+                severity=issue.severity,
+                check_name="shell_pipefail",
+            ))
+
+        if report.errors:
+            status = "FAIL"
+        elif report.warnings:
+            status = "WARN"
+        else:
+            status = "PASS"
+        return CheckResult(
+            self.display_name, status, findings,
+            f"{len(findings)} issue(s)",
+        )
 
 
 class FQCNCheck:
@@ -1469,15 +1647,60 @@ class FQCNCheck:
 class ManualWarnCountCheck:
     """Check that manual remediation tasks include the Warn Count block.
 
-    Also detects block-level vars with warn_control_id — vars must be at
-    task-level (same indentation as ansible.builtin.import_tasks:), NOT at
-    block-level (same indentation as block:).
+    Also detects misplaced `vars: warn_control_id` declarations. The legit
+    Lockdown DRY pattern is to declare warn_control_id once at the parent
+    task's task-scope, paired with a `block:` that contains the Warn Count
+    import_tasks:
+
+        - name: ...rule task...
+          vars:
+            warn_control_id: '...'
+          block:
+            - name: ...children...
+            - name: ...Warn Count
+              ansible.builtin.import_tasks: { file: warning_facts.yml }
+
+    A misplaced declaration is one where `vars: warn_control_id` appears at
+    task scope WITHOUT either a sibling `block:` plus a downstream
+    `warning_facts.yml` reference within that block. Those genuinely need
+    to be moved next to their import_tasks: line.
     """
     display_name = "Manual Warn Count"
 
     def __init__(self, scanner: RepoScanner):
         self.scanner = scanner
         self.d = scanner.directory
+
+    @staticmethod
+    def _is_legit_parent_vars_for_block(lines: List[str],
+                                        vars_line_idx: int) -> bool:
+        """Return True if the `vars:` at lines[vars_line_idx] belongs to a
+        parent task that pairs it with a `block:` containing a
+        `warning_facts.yml` import. That is the intended DRY Lockdown
+        convention and should not be flagged.
+        """
+        # Find task start: most recent `- name:` line at column 0
+        task_start = None
+        for back in range(vars_line_idx, -1, -1):
+            if re.match(r"^- name:", lines[back]):
+                task_start = back
+                break
+        if task_start is None:
+            return False
+        # Find task end: next `- name:` at column 0, or EOF
+        task_end = len(lines)
+        for fwd in range(vars_line_idx + 1, len(lines)):
+            if re.match(r"^- name:", lines[fwd]):
+                task_end = fwd
+                break
+        has_block = False
+        has_warning_facts = False
+        for k in range(task_start, task_end):
+            if re.match(r"^  block:\s*$", lines[k].rstrip()):
+                has_block = True
+            if "warning_facts.yml" in lines[k]:
+                has_warning_facts = True
+        return has_block and has_warning_facts
 
     def run(self) -> CheckResult:
         findings: List[Finding] = []
@@ -1520,11 +1743,15 @@ class ManualWarnCountCheck:
                             f"block{cid_text}",
                             "warning", "manual_warn_count"))
 
-                # --- Check 2: block-level vars with warn_control_id ---
+                # --- Check 2: misplaced vars with warn_control_id ---
+                # Legit DRY pattern: parent task scope `vars: warn_control_id`
+                # paired with `block:` that contains a warning_facts.yml
+                # import. Only flag when that pairing is absent.
                 if (re.match(r'^  vars:\s*$', line) and
                         i + 1 < len(lines) and
                         re.match(r'^    warn_control_id:',
-                                 lines[i + 1].rstrip())):
+                                 lines[i + 1].rstrip()) and
+                        not self._is_legit_parent_vars_for_block(lines, i)):
                     cid_match = re.search(
                         r"warn_control_id:\s*['\"]?([^'\"]+)",
                         lines[i + 1])
@@ -1532,9 +1759,10 @@ class ManualWarnCountCheck:
                     cid_text = f" ({cid})" if cid else ""
                     findings.append(Finding(
                         rel, i + 1,
-                        f"Block-level vars with warn_control_id{cid_text} — "
-                        f"should be task-level (same indent as "
-                        f"ansible.builtin.import_tasks:)",
+                        f"Misplaced vars with warn_control_id{cid_text} — "
+                        f"either declare at parent task scope with a sibling "
+                        f"block: containing warning_facts.yml, or place at "
+                        f"the same indent as ansible.builtin.import_tasks:",
                         "warning", "block_level_warn_vars"))
 
                 i += 1
@@ -1659,8 +1887,18 @@ CHECK_DESCRIPTIONS: Dict[str, str] = {
         "Are there outdated company/organization name references that "
         "need updating?"
     ),
+    "Meta Validate": (
+        "Does meta/main.yml declare author, company, and min_ansible_version?"
+    ),
     "Audit Template": (
         "Does the goss audit variable template contain any duplicate keys?"
+    ),
+    "Audit Variable Placement": (
+        "Are audit variables in the right file (user-overridable toggles in "
+        "defaults/main.yml, role-internal constants in vars/audit.yml)?"
+    ),
+    "Shell Pipefail Layout": (
+        "Do ansible.builtin.shell tasks set -o pipefail and args: executable:?"
     ),
     "FQCN Usage": (
         "Are all Ansible module names fully qualified (ansible.builtin.*)?"
@@ -1736,12 +1974,35 @@ CHECK_CRITERIA: Dict[str, str] = {
         "company_old_names in .qa_config.yml) are found, indicating branding "
         "that was not updated after a rename."
     ),
+    "Meta Validate": (
+        "Validates meta/main.yml for the expected galaxy metadata: author, "
+        "company, and min_ansible_version. Findings appear here when a required "
+        "field is missing or does not match the Lockdown convention, which can "
+        "break Galaxy publishing or platform declarations."
+    ),
     "Audit Template": (
-        "Validates the Goss audit variable template "
-        "(templates/ansible_vars_goss.yml.j2) for duplicate keys. Duplicate "
-        "keys in YAML cause one value to silently override the other, leading "
-        "to audit tests using wrong variable values. Findings appear here when "
-        "the same variable name appears more than once in the template."
+        "Validates Goss audit bridge templates "
+        "(templates/lockdown_audit.yml.j2 and templates/ansible_vars_goss.yml.j2) "
+        "for duplicate keys. Duplicate keys in YAML cause one value to silently "
+        "override the other, leading to audit tests using wrong variable values. "
+        "Findings appear here when the same variable name appears more than once "
+        "in a template."
+    ),
+    "Audit Variable Placement": (
+        "Validates that audit variables live in the correct file: "
+        "user-overridable toggles (setup_audit, run_audit, audit_only, "
+        "fetch_audit_output, ...) in defaults/main.yml, and role-internal "
+        "constants (audit_cmd_timeout, audit_bin_*, pre/post_audit_outfile, ...) "
+        "in vars/audit.yml. A var in vars/audit.yml cannot be overridden from "
+        "molecule play/host vars (include_vars outranks them), so misplacement "
+        "silently breaks overrides. Delegates to scripts/check_audit_vars.py."
+    ),
+    "Shell Pipefail Layout": (
+        "Validates that ansible.builtin.shell tasks set 'set -o pipefail' as the "
+        "first line of the shell block and declare args: executable: "
+        '"{{ <prefix>_shell_executable }}". Without pipefail a failing command '
+        "in a pipe is masked by the exit status of the last command. Delegates "
+        "to scripts/check_shell_pipefail.py."
     ),
     "FQCN Usage": (
         "Detects bare (non-fully-qualified) Ansible module names in tasks and "
@@ -2335,8 +2596,8 @@ def parse_args() -> argparse.Namespace:
 
             check names for --skip:
               yamllint, ansiblelint, spelling, grammar, unused_vars,
-              var_naming, file_mode, company_naming, audit_template,
-              fqcn, manual_warn, rule_coverage
+              var_naming, file_mode, company_naming, meta_validate,
+              audit_template, audit_vars, shell_pipefail, fqcn, manual_warn, rule_coverage
 
             exit codes:
               0  All checks passed (or only warnings without --strict)
@@ -2406,8 +2667,9 @@ def main() -> None:
     if args.only:
         all_check_names = {
             "yamllint", "ansiblelint", "spelling", "grammar", "unused_vars",
-            "var_naming", "file_mode", "company_naming", "audit_template",
-            "fqcn", "rule_coverage",
+            "var_naming", "file_mode", "company_naming", "meta_validate",
+            "audit_template", "audit_vars", "shell_pipefail", "fqcn", "manual_warn",
+            "rule_coverage",
         }
         only = {s.strip().lower() for s in args.only.split(",") if s.strip()}
         skip |= all_check_names - only
@@ -2429,6 +2691,7 @@ def main() -> None:
     else:
         output_path = None  # will be set after scanner provides metadata
     exclude_paths = {os.path.abspath(output_path)} if output_path else set()
+    exclude_paths |= discover_qa_artifact_paths(directory)
 
     # Progress: auto-enable on TTY unless explicitly disabled
     show_progress = (not args.no_progress

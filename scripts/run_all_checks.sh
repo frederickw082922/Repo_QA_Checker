@@ -114,16 +114,18 @@ run_script() {
     fi
 
     ((TOTAL++)) || true
-    output=$(python3 "$SCRIPTS_DIR/$script" "$@" 2>&1) || true
+    output=$(python3 "$SCRIPTS_DIR/$script" "$@" 2>&1)
+    script_exit=$?
     echo "$output"
 
-    # Track results — check for clean indicators first, then warnings
-    if echo "$output" | grep -qiE "(Total issues:\s+0$|No deprecated|: 0$|All rules have|Total bare modules: 0|Total missing|Total unquoted modes: 0)"; then
+    # Each check_*.py / fix_*.py exits 0 when clean, 1 when issues found.
+    # Trust the exit code rather than grepping output; the regex-on-output
+    # approach mis-scored scripts whose tails happened to contain ": 0"
+    # (clean indicator) while their bodies emitted real warnings.
+    if [[ $script_exit -eq 0 ]]; then
         ((PASS++)) || true
-    elif echo "$output" | grep -qiE "\[warning\]|\[error\]|Run with --fix|Total issues:\s+[1-9]|Total missing.*[1-9]|Total loops missing"; then
-        ((WARN++)) || true
     else
-        ((PASS++)) || true
+        ((WARN++)) || true
     fi
 }
 
@@ -153,6 +155,8 @@ if $RUN_CHECKS; then
     run_script "Template Headers"                 check_template_headers.py "$REPO"
     run_script "Variable Naming"                  check_var_naming.py     "$REPO"
     run_script "Audit Template Keys"              check_audit_keys.py     "$REPO"
+    run_script "Audit Variable Placement"         check_audit_vars.py     "$REPO"
+    run_script "shell pipefail"                   check_shell_pipefail.py     "$REPO"
 fi
 
 # ── Fix Scripts (dry-run or --fix) ────────────────────────────
@@ -180,6 +184,7 @@ if $RUN_FIXES; then
     run_script "ignore_errors to failed_when" fix_ignore_errors.py "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
     run_script "Missing no_log"              fix_no_log.py         "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
     run_script "Missing loop_control"        fix_loop_control.py   "$REPO" ${FIX_FLAG:+"$FIX_FLAG"}
+    run_script "shell pipefail"              fix_shell_pipefail.py "$REPO/tasks" ${FIX_FLAG:+"$FIX_FLAG"}
 fi
 
 # ── Summary ───────────────────────────────────────────────────

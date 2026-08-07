@@ -27,7 +27,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "2.7.0"
+VERSION = "2.8.1"
 
 
 def detect_benchmark_name(pre_file, post_file):

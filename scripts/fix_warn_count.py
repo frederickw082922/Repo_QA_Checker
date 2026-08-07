@@ -118,11 +118,45 @@ def scan_file(filepath, repo_path):
     return issues
 
 
-def scan_block_level_vars(filepath, repo_path):
-    """Scan a file for block-level vars with warn_control_id (wrong placement).
+def _is_legit_parent_vars_for_block(lines, vars_line_idx):
+    """Return True if the `vars:` at lines[vars_line_idx] belongs to a
+    parent task that pairs it with a `block:` containing a `warning_facts.yml`
+    import. That is the intended DRY Lockdown convention and should not be
+    flagged as a misplaced declaration.
 
-    The vars: + warn_control_id: should be at task-level (on the import_tasks
-    task), not at block-level (on the parent block task).
+    Mirrors the helper in Ansible_Lockdown_QA_Repo_Check.py's
+    ManualWarnCountCheck. Kept duplicated rather than imported to keep
+    these scripts independently runnable.
+    """
+    task_start = None
+    for back in range(vars_line_idx, -1, -1):
+        if re.match(r"^- name:", lines[back]):
+            task_start = back
+            break
+    if task_start is None:
+        return False
+    task_end = len(lines)
+    for fwd in range(vars_line_idx + 1, len(lines)):
+        if re.match(r"^- name:", lines[fwd]):
+            task_end = fwd
+            break
+    has_block = False
+    has_warning_facts = False
+    for k in range(task_start, task_end):
+        if re.match(r"^  block:\s*$", lines[k].rstrip()):
+            has_block = True
+        if "warning_facts.yml" in lines[k]:
+            has_warning_facts = True
+    return has_block and has_warning_facts
+
+
+def scan_block_level_vars(filepath, repo_path):
+    """Scan a file for misplaced vars with warn_control_id.
+
+    The legit Lockdown DRY pattern is `vars: warn_control_id` at parent
+    task scope paired with a `block:` whose children import
+    `warning_facts.yml`. Flag only when that pairing is absent — those
+    declarations are genuinely misplaced.
     """
     issues = []
     rel = os.path.relpath(filepath, repo_path)
@@ -134,9 +168,14 @@ def scan_block_level_vars(filepath, repo_path):
     while i < len(lines):
         line = lines[i]
 
-        # Look for block-level vars: (2-space indent) followed by warn_control_id
+        # Look for vars: (2-space indent) followed by warn_control_id
         if BLOCK_LEVEL_VARS_RE.match(line):
             if i + 1 < len(lines) and BLOCK_LEVEL_WARN_ID_RE.match(lines[i + 1]):
+                # Skip the legit parent-vars-for-block DRY pattern
+                if _is_legit_parent_vars_for_block(lines, i):
+                    i += 1
+                    continue
+
                 # Extract the control ID
                 cid_match = re.search(r"warn_control_id:\s*['\"]?([^'\"]+)",
                                       lines[i + 1])
@@ -163,13 +202,22 @@ def scan_block_level_vars(filepath, repo_path):
 
 
 def fix_block_level_vars(filepath, issues):
-    """Move block-level vars to task-level on the import_tasks task."""
+    """Move misplaced vars to task-level on the import_tasks task.
+
+    Returns (fixed_count, skipped) tuple. Issues with no warning_facts.yml
+    target in scope are skipped — silently deleting the vars there would
+    hide a missing-Warn-Count signal. Such issues need human attention
+    to decide between (a) add the Warn Count import, or (b) remove the
+    unused vars.
+    """
     if not issues:
-        return False
+        return 0, []
 
     with open(filepath, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
+    fixed = 0
+    skipped = []
     # Process in reverse to preserve line numbers
     for issue in sorted(issues, key=lambda x: x["vars_line"], reverse=True):
         vars_idx = issue["vars_line"]
@@ -177,41 +225,48 @@ def fix_block_level_vars(filepath, issues):
         import_idx = issue["import_facts_line"]
         cid = issue["control_id"]
 
-        # Remove block-level vars: and warn_control_id: lines
+        if import_idx is None:
+            # No warning_facts.yml in scope — refuse to auto-move.
+            # The vars: is likely a real missing-Warn-Count signal.
+            skipped.append(issue)
+            continue
+
+        # Remove misplaced vars: and warn_control_id: lines
         del lines[warn_id_idx]
         del lines[vars_idx]
 
         # Adjust import_idx since we removed 2 lines before it
-        if import_idx is not None:
-            import_idx -= 2
+        import_idx -= 2
 
-            # Find the indentation of import_tasks (the line before import_facts)
-            import_tasks_line = import_idx - 1
-            if import_tasks_line >= 0:
-                indent_match = re.match(r'^(\s+)', lines[import_tasks_line])
-                if indent_match:
-                    task_indent = indent_match.group(1)
-                    content_indent = task_indent + "  "
+        # Find the indentation of import_tasks (the line before import_facts)
+        import_tasks_line = import_idx - 1
+        if import_tasks_line >= 0:
+            indent_match = re.match(r'^(\s+)', lines[import_tasks_line])
+            if indent_match:
+                task_indent = indent_match.group(1)
+                content_indent = task_indent + "  "
 
-                    # Check if vars: already exists after warning_facts.yml
-                    next_idx = import_idx + 1
-                    has_vars = (next_idx < len(lines) and
-                                'vars:' in lines[next_idx] and
-                                'warn_control_id' in lines[min(next_idx + 1,
-                                                                len(lines) - 1)])
+                # Check if vars: already exists after warning_facts.yml
+                next_idx = import_idx + 1
+                has_vars = (next_idx < len(lines) and
+                            'vars:' in lines[next_idx] and
+                            'warn_control_id' in lines[min(next_idx + 1,
+                                                            len(lines) - 1)])
 
-                    if not has_vars:
-                        # Insert task-level vars after the import_facts line
-                        insert_at = import_idx + 1
-                        lines.insert(insert_at,
-                                     f"{task_indent}vars:\n")
-                        lines.insert(insert_at + 1,
-                                     f"{content_indent}warn_control_id: '{cid}'\n")
+                if not has_vars:
+                    # Insert task-level vars after the import_facts line
+                    insert_at = import_idx + 1
+                    lines.insert(insert_at,
+                                 f"{task_indent}vars:\n")
+                    lines.insert(insert_at + 1,
+                                 f"{content_indent}warn_control_id: '{cid}'\n")
+        fixed += 1
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+    if fixed > 0:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.writelines(lines)
 
-    return True
+    return fixed, skipped
 
 
 def apply_fixes(filepath, issues):
@@ -293,10 +348,16 @@ def main():
                       f"'{issue['control_id']}' (should be task-level)")
 
             if args.fix:
-                if fix_block_level_vars(filepath, blv_issues):
-                    rel = os.path.relpath(filepath, args.repo_path)
-                    print(f"  FIXED: {rel} ({len(blv_issues)} vars moved "
-                          f"to task-level)")
+                fixed, skipped = fix_block_level_vars(filepath, blv_issues)
+                rel = os.path.relpath(filepath, args.repo_path)
+                if fixed:
+                    print(f"  FIXED: {rel} ({fixed} vars moved to "
+                          f"task-level)")
+                for skip in skipped:
+                    print(f"  SKIPPED: {rel}:{skip['line']} - vars for "
+                          f"'{skip['control_id']}' has no warning_facts.yml "
+                          f"target in scope. Needs human decision: add Warn "
+                          f"Count import, or remove unused vars.")
 
     total_issues = total_missing + total_misplaced
     print(f"\n{'='*60}")
