@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.8.2"
+TOOL_VERSION = "2.8.3"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -730,6 +730,11 @@ class YamlLintCheck:
 class AnsibleLintCheck:
     display_name = "Ansible Lint"
 
+    # Trailing severity ansible-lint appends to every pep8 line, e.g. " (warning)". Anchored to
+    # end of line so a message that merely contains a parenthesised word is not truncated.
+    _SEVERITY_SUFFIX = re.compile(
+        r"\s+\((warning|error|info|note|fatal)\)\s*$", re.IGNORECASE)
+
     def __init__(self, scanner: RepoScanner):
         self.scanner = scanner
 
@@ -764,8 +769,20 @@ class AnsibleLintCheck:
         # ansible-lint's pep8 formatter emits "file:line: rule[/]" - the rule id is the last
         # field and there is no trailing ": message". The older pattern required one, so it
         # matched nothing and every run reported PASS regardless of findings.
+        #
+        # It also appends the rule's own severity in parentheses, e.g.
+        #   tasks/Cat2/RHEL-10-200xxx.yml:1: complexity[tasks][/] (warning)
+        # That suffix is separated by a space, not by ": ", so making the message optional was
+        # not enough on its own - the rule group cannot span the space and the line still did
+        # not match. The suffix is stripped first, and supplies the real severity instead of
+        # every finding being recorded as a warning.
         pat = re.compile(r"^(.+?):(\d+)(?::\d+)?:\s+(\S+?)(?::\s+(.+))?$")
         for line in output.splitlines():
+            severity = "warning"
+            sev_m = self._SEVERITY_SUFFIX.search(line)
+            if sev_m:
+                severity = sev_m.group(1).lower()
+                line = line[:sev_m.start()]
             m = pat.match(line)
             if m:
                 rule = m.group(3)
@@ -775,11 +792,15 @@ class AnsibleLintCheck:
                 # Skip Python warnings captured from stderr (not lint findings)
                 if "ResourceWarning" in (m.group(4) or "") or "Warning" in rule:
                     continue
+                # No baseline in the fleet carried an ansiblelint entry before this release,
+                # because the check never produced one, so refining the description here breaks
+                # no baseline key. Repeating the rule as its own message read as "[rule] rule".
+                msg = m.group(4)
                 findings.append(Finding(
                     file=m.group(1),
                     line=int(m.group(2)),
-                    description=f"[{rule}] {m.group(4) or rule}",
-                    severity="warning",
+                    description=f"[{rule}] {msg}" if msg else f"[{rule}]",
+                    severity=severity,
                     check_name="ansiblelint"))
         return findings
 

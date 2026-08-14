@@ -4,6 +4,29 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.8.3 - 2026-08-14
+
+### Fixed
+
+- **The Ansible Lint parser still matched nothing, so 2.8.2 did not lift the blind spot it reported fixing.** 2.8.2 made the trailing `: message` optional, but ansible-lint's pep8 formatter also appends the rule's own severity in parentheses, separated by a space rather than by `": "`:
+
+  ```
+  tasks/Cat2/RHEL-10-200xxx.yml:1: complexity[tasks][/] (warning)
+  tasks/Cat2/RHEL-10-400xxx.yml:685:9: jinja[spacing][/] (warning)
+  ```
+
+  The rule-id group is `(\S+?)`, which cannot span the space, and there is no `": "` before `(warning)` to satisfy the optional message group, so the line still failed to match and every repo continued to report `Ansible Lint  (0 issue(s))`. The severity suffix is now stripped before the line is parsed. Verified against Private-RHEL10-STIG `benchmark_v1r1`, which went 0 -> **6** findings (4x `complexity[tasks]`, 2x `jinja[spacing]`), matching a direct `ansible-lint --nocolor -f pep8` run file for file and line for line, with ansible-lint 26.4.0. Private-UBUNTU24-STIG is genuinely lint-clean on both release lines and correctly stays at 0 with ansible-lint 26.3.0.
+
+- **Every ansible-lint finding was recorded as `warning` regardless of the rule's real severity.** The severity was hardcoded because the suffix carrying it was never read. It is now taken from the suffix. This matters under `--baseline`, where a check's status is recomputed as `FAIL` if any new finding is an `error` and `WARN` otherwise: an `error`-severity lint finding now correctly rolls up to `FAIL` (exit 2 under `--strict`) instead of `WARN` (exit 1).
+
+- **Findings with no message read as `[rule] rule`.** The description fell back to repeating the rule id as its own message. It is now just `[rule]`. No baseline in the fleet contained an `ansiblelint` entry - the check had never produced one - so no baseline key is invalidated by the change.
+
+### Note on behaviour change
+
+Repos that were passing the Ansible Lint check only because the parser was blind will now report their real findings, and under `--strict` a repo with unbaselined warning-severity findings exits 1. Known fleet impact at the time of release: Private-RHEL10-STIG has 6 such findings on both `benchmark_v1r1` and `benchmark_v1r2`; Private-UBUNTU24-STIG has none. Private-RHEL8-STIG and Private-RHEL9-STIG were not measured for this release.
+
+---
+
 ## 2.8.2 - 2026-08-14
 
 ### Fixed
