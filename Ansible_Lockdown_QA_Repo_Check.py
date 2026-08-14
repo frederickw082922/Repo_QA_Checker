@@ -1323,11 +1323,15 @@ class MetaValidateCheck:
 
     # Expected values
     EXPECTED_AUTHOR = "Ansible-Lockdown Team"
-    # Accepted while the fleet migrates from the Tyto Athene parent to Quantum Sky. The first
-    # entry is the preferred value and is what a mismatch message suggests. Override per repo
-    # with expected_company in .qa_config.yml.
-    EXPECTED_COMPANIES = ["MindPoint Group - A Quantum Sky Company",
-                          "MindPoint Group - A Tyto Athene Company"]
+    # The sole accepted parent company. Quantum Sky is the current parent; the former Tyto
+    # Athene form is deliberately NOT accepted, so that meta/main.yml is held to the same
+    # standard company_old_names applies everywhere else. Without this, the company field is
+    # the one place a stale parent cannot be reported: Company Naming skips it because
+    # "company:" is a line-suppression pattern, and this check would allowlist it.
+    # A repo with a legitimate variant - e.g. the SUSE15 roles, co-branded
+    # "MindPoint Group and SVA gmbh" - sets expected_company in .qa_config.yml rather than
+    # widening this list.
+    EXPECTED_COMPANIES = ["MindPoint Group - A Quantum Sky Company"]
     MIN_ANSIBLE_VERSION = "2.16.1"
 
     def __init__(self, scanner: RepoScanner):

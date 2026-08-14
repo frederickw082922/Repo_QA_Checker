@@ -369,7 +369,9 @@ company_exclude_patterns:
   - company_title
 
 # meta/main.yml company values accepted by Meta Validate. Omit to accept the built-in list,
-# which covers both the Quantum Sky and Tyto Athene parent names during the migration.
+# which is "MindPoint Group - A Quantum Sky Company" alone. Set this only where a repo has a
+# legitimate different company, such as the SUSE15 roles co-branded with SVA gmbh - not to
+# grandfather in a stale parent name. Accepts a string or a list.
 expected_company:
   - MindPoint Group - A Quantum Sky Company
 
@@ -399,7 +401,7 @@ If no config file is present, these defaults are used:
 | `company_old_names` | `tyto athene` |
 | _(scan scope)_ | `.yml .yaml .j2 .md .py .sh .txt .cfg`, plus `LICENSE`, `LICENSE.md`, `LICENSE.txt`, `NOTICE` |
 | `company_exclude_patterns` | `project`, `author`, `company:`, `namespace`, `company_title` |
-| `expected_company` | `null` (accepts the Quantum Sky and Tyto Athene parent names) |
+| `expected_company` | `null` (accepts `MindPoint Group - A Quantum Sky Company` only) |
 | `min_severity` | `info` |
 
 ---
