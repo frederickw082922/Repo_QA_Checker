@@ -8,14 +8,23 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ### Fixed
 
-- **The Ansible Lint parser still matched nothing, so 2.8.2 did not lift the blind spot it reported fixing.** 2.8.2 made the trailing `: message` optional, but ansible-lint's pep8 formatter also appends the rule's own severity in parentheses, separated by a space rather than by `": "`:
+- **The Ansible Lint parser dropped every finding that carries a severity suffix.** 2.8.2 fixed the dominant case by making the trailing `: message` optional, and that was a real fix - it is what took Private-Windows-2019-STIG from 0 to 20 findings. It did not cover the rest: ansible-lint annotates some rules with their own severity in parentheses, separated by a space rather than by `": "`.
 
   ```
-  tasks/Cat2/RHEL-10-200xxx.yml:1: complexity[tasks][/] (warning)
-  tasks/Cat2/RHEL-10-400xxx.yml:685:9: jinja[spacing][/] (warning)
+  tasks/Cat1/WN19-00-xxxxxx.yml:173: yaml[comments-indentation]          <- parsed since 2.8.2
+  tasks/Cat2/RHEL-10-400xxx.yml:685:9: jinja[spacing][/] (warning)       <- still dropped
   ```
 
-  The rule-id group is `(\S+?)`, which cannot span the space, and there is no `": "` before `(warning)` to satisfy the optional message group, so the line still failed to match and every repo continued to report `Ansible Lint  (0 issue(s))`. The severity suffix is now stripped before the line is parsed. Verified against Private-RHEL10-STIG `benchmark_v1r1`, which went 0 -> **6** findings (4x `complexity[tasks]`, 2x `jinja[spacing]`), matching a direct `ansible-lint --nocolor -f pep8` run file for file and line for line, with ansible-lint 26.4.0. Private-UBUNTU24-STIG is genuinely lint-clean on both release lines and correctly stays at 0 with ansible-lint 26.3.0.
+  The rule-id group is `(\S+?)`, which cannot span the space, and there is no `": "` before `(warning)` to satisfy the optional message group, so suffixed lines still failed to match. The suffix is now stripped before the line is parsed.
+
+  Measured with ansible-lint 26.4.0, comparing each run against a direct `ansible-lint --nocolor -f pep8` invocation on the same tree:
+
+  | Repo | Real findings | 2.8.2 reported | 2.8.3 reports |
+  | --- | --- | --- | --- |
+  | Private-Windows-2019-STIG | 22 (20 bare, 2 suffixed) | 20 | 22 |
+  | Private-RHEL10-STIG `benchmark_v1r1` | 6 (all suffixed) | 0 | 6 |
+
+  RHEL10 is the worst case rather than the typical one: all 6 of its findings are `complexity[tasks]` and `jinja[spacing]`, both suffixed, so that repo alone still reported a clean lint result under 2.8.2. Private-UBUNTU24-STIG is genuinely lint-clean on both release lines and correctly stays at 0 with ansible-lint 26.3.0, confirming the change does not manufacture findings.
 
 - **Every ansible-lint finding was recorded as `warning` regardless of the rule's real severity.** The severity was hardcoded because the suffix carrying it was never read. It is now taken from the suffix. This matters under `--baseline`, where a check's status is recomputed as `FAIL` if any new finding is an `error` and `WARN` otherwise: an `error`-severity lint finding now correctly rolls up to `FAIL` (exit 2 under `--strict`) instead of `WARN` (exit 1).
 
@@ -23,7 +32,7 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ### Note on behaviour change
 
-Repos that were passing the Ansible Lint check only because the parser was blind will now report their real findings, and under `--strict` a repo with unbaselined warning-severity findings exits 1. Known fleet impact at the time of release: Private-RHEL10-STIG has 6 such findings on both `benchmark_v1r1` and `benchmark_v1r2`; Private-UBUNTU24-STIG has none. Private-RHEL8-STIG and Private-RHEL9-STIG were not measured for this release.
+Repos whose findings are all severity-suffixed were still passing the Ansible Lint check and will now report them, so under `--strict` a repo with unbaselined warning-severity findings exits 1. Known fleet impact at the time of release: Private-RHEL10-STIG gains 6 findings on both `benchmark_v1r1` and `benchmark_v1r2`, taking it from a clean lint result to a failing one; Private-Windows-2019-STIG gains 2 on top of the 20 it already reported; Private-UBUNTU24-STIG has none. Private-RHEL8-STIG and Private-RHEL9-STIG were not measured for this release.
 
 ---
 
