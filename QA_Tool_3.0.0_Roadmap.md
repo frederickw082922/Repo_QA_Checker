@@ -79,46 +79,6 @@ Add a `LintConfigCheck` that validates `.ansible-lint` and `.yamllint` configura
 
 ---
 
-### 3b. Override-File Toggle Validation (New Check #14)
-
-**Status:** Not in tool — this is a real blind spot. The existing "ghost toggle"
-logic only traverses `defaults/main.yml -> tasks/` (does each declared toggle have a
-task body?), so it cannot see toggle keys that live ONLY in an override vars file.
-
-Add an `OverrideToggleCheck` that validates override/vars files which set toggles -
-`vars/is_container.yml` and any file named by `container_vars_file` - against the
-declared toggle set:
-
-- Auto-detect the benchmark toggle prefix (same logic as existing checks).
-- For each `<prefix>NNNNNN:` key in the override file, flag any that do NOT exist as a
-  declared toggle in `defaults/main.yml` (phantom / orphan override - inert dead code).
-- Reverse of the existing ghost-toggle check; run BOTH directions.
-- Optional (when a benchmark file is provided): also flag override keys whose rule ID is
-  absent from the benchmark XCCDF (stale across a version bump).
-- Auto-fix with `--fix`: delete the phantom key lines (preserve section comments).
-- Severity: `warning`.
-- Configurable via `.qa_config.yml`:
-
-  ```yaml
-  override_toggle_files:      # defaults to vars/is_container.yml
-    - "vars/is_container.yml"
-  ```
-
-**Why:** RHEL9-STIG V2R9 shipped with 6 phantom `is_container.yml` entries
-(`rhel_09_232265/251025/652035/654260/672035/672040`) that matched no rule in ANY
-XCCDF version and had survived every prior QA cycle - because no check ever ran the
-`override-file -> defaults` direction. See upgrade-template lesson #53a.
-
-**Recipe the check automates:**
-
-```bash
-comm -23 \
-  <(grep -oE '^<prefix>[0-9]+' vars/is_container.yml | sort -u) \
-  <(grep -oE '^<prefix>[0-9]+' defaults/main.yml | sort -u)
-```
-
----
-
 ## Medium Priority — Improvements to Existing Checks
 
 ### 4. Flexible Audit Template Patterns
