@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.8.1"
+TOOL_VERSION = "2.8.2"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -403,8 +403,14 @@ class ConfigLoader:
         "spelling_exceptions": [],
         "register_prefixes": list(VALID_REGISTER_PREFIXES),
         "fqcn_exclude_paths": ["molecule/"],
-        "company_old_names": ["mindpoint"],
-        "company_exclude_patterns": ["tyto", "project", "author",
+        # The company is MindPoint Group; what changed is the parent. Listing "mindpoint" here
+        # flags the current, correct name on every repo that prints it in a banner.
+        "company_old_names": ["tyto athene"],
+        # None means "use the built-in accepted list"; set a string or list to pin one value.
+        "expected_company": None,
+        # NOTE: do not put a company name here. These patterns suppress a line entirely,
+        # so listing a brand makes it impossible to ever flag that brand as outdated.
+        "company_exclude_patterns": ["project", "author",
                                      "company:", "namespace",
                                      "company_title"],
         "min_severity": "info",
@@ -755,7 +761,10 @@ class AnsibleLintCheck:
         # Modern ansible-lint pep8 format:
         #   file:line:col: rule[subrule]: message
         #   file:line: rule: message
-        pat = re.compile(r"^(.+?):(\d+)(?::\d+)?: (\S+?):\s+(.+)$")
+        # ansible-lint's pep8 formatter emits "file:line: rule[/]" - the rule id is the last
+        # field and there is no trailing ": message". The older pattern required one, so it
+        # matched nothing and every run reported PASS regardless of findings.
+        pat = re.compile(r"^(.+?):(\d+)(?::\d+)?:\s+(\S+?)(?::\s+(.+))?$")
         for line in output.splitlines():
             m = pat.match(line)
             if m:
@@ -764,12 +773,12 @@ class AnsibleLintCheck:
                 if rule.startswith("Read") or rule.startswith("Failed"):
                     continue
                 # Skip Python warnings captured from stderr (not lint findings)
-                if "ResourceWarning" in m.group(4) or "Warning" in rule:
+                if "ResourceWarning" in (m.group(4) or "") or "Warning" in rule:
                     continue
                 findings.append(Finding(
                     file=m.group(1),
                     line=int(m.group(2)),
-                    description=f"[{rule}] {m.group(4)}",
+                    description=f"[{rule}] {m.group(4) or rule}",
                     severity="warning",
                     check_name="ansiblelint"))
         return findings
@@ -1257,13 +1266,13 @@ class CompanyNamingCheck:
 
     def run(self) -> CheckResult:
         findings: List[Finding] = []
-        old_names = self.scanner.config.get("company_old_names", ["mindpoint"])
+        old_names = self.scanner.config.get("company_old_names", ["tyto athene"])
         if not old_names:
             return CheckResult(self.display_name, "SKIP",
                                summary="No company names configured")
         exclude_pats = self.scanner.config.get(
             "company_exclude_patterns",
-            ["tyto", "project", "author", "company:", "namespace",
+            ["project", "author", "company:", "namespace",
              "company_title"])
         exclude_in_line = re.compile(
             "|".join(re.escape(p) for p in exclude_pats),
@@ -1271,14 +1280,25 @@ class CompanyNamingCheck:
         search_pat = re.compile(
             "|".join(re.escape(n) for n in old_names),
             re.IGNORECASE)
-        exclude_files = {"README.md", "CONTRIBUTING.rst", "LICENSE",
-                         "CHANGELOG.md", "Changelog.md",
-                         os.path.basename(__file__)}
+        # Compared case-insensitively: repos in the fleet variously track CHANGELOG.md,
+        # Changelog.md and ChangeLog.md, and a case-sensitive set misses two of the three.
+        # LICENSE is deliberately NOT excluded. Its copyright holder line is one of the few
+        # places the company name is actually written, so excluding it defeated the check.
+        exclude_files = {"readme.md", "contributing.rst",
+                         "changelog.md",
+                         os.path.basename(__file__).lower()}
         files = self.scanner.collect_files(self.scanner.directory,
-                                           {".yml", ".yaml", ".j2", ".md", ".py", ".sh"})
+                                           {".yml", ".yaml", ".j2", ".md", ".py",
+                                            ".sh", ".txt", ".cfg"})
+        # LICENSE has no extension, so collect_files never returns it. Its copyright holder
+        # line is one of the few places the company name is written, so add it explicitly.
+        for extra in ("LICENSE", "LICENSE.md", "LICENSE.txt", "NOTICE"):
+            cand = os.path.join(self.scanner.directory, extra)
+            if os.path.isfile(cand) and cand not in files:
+                files.append(cand)
         for fp in files:
             rel = _relpath(fp, self.scanner.directory)
-            if os.path.basename(fp) in exclude_files:
+            if os.path.basename(fp).lower() in exclude_files:
                 continue
             if "meta/" in rel:
                 continue
@@ -1291,7 +1311,11 @@ class CompanyNamingCheck:
                         rel, num,
                         f"Outdated company name '{m.group()}' found",
                         "warning", "company_naming"))
-        status = "PASS" if not findings else "FAIL"
+        # Every finding here is emitted at "warning" severity, and branding lags a rebrand for
+        # legitimate reasons, so this rolls up to WARN rather than FAIL - matching Meta Validate,
+        # the other check that judges the company name. A default run stays exit 0; use --strict
+        # to gate on it.
+        status = "PASS" if not findings else "WARN"
         return CheckResult(self.display_name, status, findings,
                            f"{len(findings)} issue(s)")
 
@@ -1303,7 +1327,15 @@ class MetaValidateCheck:
 
     # Expected values
     EXPECTED_AUTHOR = "Ansible-Lockdown Team"
-    EXPECTED_COMPANY = "MindPoint Group - A Tyto Athene Company"
+    # The sole accepted parent company. Quantum Sky is the current parent; the former Tyto
+    # Athene form is deliberately NOT accepted, so that meta/main.yml is held to the same
+    # standard company_old_names applies everywhere else. Without this, the company field is
+    # the one place a stale parent cannot be reported: Company Naming skips it because
+    # "company:" is a line-suppression pattern, and this check would allowlist it.
+    # A repo with a legitimate variant - e.g. the SUSE15 roles, co-branded
+    # "MindPoint Group and SVA gmbh" - sets expected_company in .qa_config.yml rather than
+    # widening this list.
+    EXPECTED_COMPANIES = ["MindPoint Group - A Quantum Sky Company"]
     MIN_ANSIBLE_VERSION = "2.16.1"
 
     def __init__(self, scanner: RepoScanner):
@@ -1342,10 +1374,13 @@ class MetaValidateCheck:
 
         # Check company
         company = gi.get("company", "")
-        if company != self.EXPECTED_COMPANY:
+        accepted = self.scanner.config.get("expected_company") or self.EXPECTED_COMPANIES
+        if isinstance(accepted, str):
+            accepted = [accepted]
+        if company not in accepted:
             findings.append(Finding(
                 "meta/main.yml", 0,
-                f"company: '{company}' should be '{self.EXPECTED_COMPANY}'",
+                f"company: '{company}' should be '{accepted[0]}'",
                 "warning", "meta_validate"))
 
         # Check min_ansible_version
