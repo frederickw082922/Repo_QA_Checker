@@ -4,6 +4,28 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.8.2 - 2026-08-14
+
+### Fixed
+
+- **Ansible Lint check reported PASS regardless of findings.** The `-f pep8` output parser required a `rule: message` suffix, but ansible-lint emits `file:line: rule[/]` with no trailing message, so the pattern matched **0 of 2128** output lines on a real role and every repo reported a clean Ansible Lint result. The pattern now treats the message as optional. Verified against Private-Windows-2019-STIG (0 -> 20 findings) and Private-RHEL9-STIG (0 -> 1, matching a direct `ansible-lint` run exactly).
+- **Company Naming could not see the files the company name lives in.** The check scanned only `.yml`, `.yaml`, `.j2`, `.md`, `.py` and `.sh`, so `templates/banner.txt` was never read, and `meta/`, `README.md`, `LICENSE` and `CHANGELOG.md` are excluded by design. `.txt` and `.cfg` are now scanned.
+- **`company_exclude_patterns` shipped with a company name in it.** The default list contained `tyto`, and those patterns suppress an entire line, so any line naming the Tyto Athene parent was skipped before it could be matched. Setting `company_old_names: ["tyto athene"]` therefore produced a rule that could never fire. `tyto` removed, with a note not to list brands there.
+- **`company_old_names` defaulted to the current company.** `mindpoint` was listed as outdated, but MindPoint Group is the company name; the parent changed from Tyto Athene to Quantum Sky. The default is now `tyto athene`. Previously this only stayed quiet because the files printing the name were not scanned.
+- **`LICENSE` was never scanned, by two separate mechanisms.** It was listed in `exclude_files`, and it has no file extension so `collect_files` would not have returned it anyway. Its copyright holder line is one of the few places the company name is written. It is now removed from the exclusions and added explicitly, along with `LICENSE.md`, `LICENSE.txt` and `NOTICE`.
+- **`exclude_files` was case-sensitive.** It listed `CHANGELOG.md` and `Changelog.md`, but repos in the fleet also track `ChangeLog.md`, which was therefore scanned and flagged. Comparison is now case-insensitive.
+- **Meta Validate accepted the former parent company.** `EXPECTED_COMPANIES` listed both the Quantum Sky and Tyto Athene forms, so the same string was outdated in Company Naming and expected in Meta Validate. Because `company:` is a line-suppression pattern in `company_exclude_patterns`, Company Naming cannot report that field either, which left `meta/main.yml` as the one place a stale parent was invisible to both checks. `EXPECTED_COMPANIES` is now Quantum Sky alone. A repo with a legitimate variant - the SUSE15 roles are co-branded `MindPoint Group and SVA gmbh` - sets the new `expected_company` key in `.qa_config.yml`, which accepts either a string or a list.
+
+### Note on behaviour change
+
+Repos that previously reported a clean Ansible Lint result will now surface real findings, and repos still carrying the old parent name will now fail Company Naming. Both are true positives that the previous version could not report.
+
+Meta Validate moves in step: across the same fleet **13 repos declare the Tyto Athene parent in `meta/main.yml`** and now warn, against 3 already on Quantum Sky. Four further repos warn for reasons that predate this release and are unchanged by it - two co-branded SUSE15 roles and two naming no parent at all. Both company checks return `WARN`, not `FAIL`. Company Naming previously rolled up to `FAIL` even though every finding it emits is `warning` severity; it now matches Meta Validate. Branding lags a rebrand for legitimate reasons, so neither check should break a default run: `WARN` only affects the exit code under `--strict`, and without it the run still exits 0.
+
+Measured against the local fleet at the time of writing: **30 of 37 repos with a LICENSE still name the Tyto Athene parent** and will newly fail Company Naming. Five have already been updated to Quantum Sky and pass. The failures are the outstanding half of a rebrand that is already in progress, so the check now functions as the worklist for it rather than as noise.
+
+---
+
 ## 2.8.1 - 2026-07-01
 
 ### Added
