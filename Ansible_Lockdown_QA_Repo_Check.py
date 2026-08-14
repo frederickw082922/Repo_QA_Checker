@@ -1311,7 +1311,11 @@ class CompanyNamingCheck:
                         rel, num,
                         f"Outdated company name '{m.group()}' found",
                         "warning", "company_naming"))
-        status = "PASS" if not findings else "FAIL"
+        # Every finding here is emitted at "warning" severity, and branding lags a rebrand for
+        # legitimate reasons, so this rolls up to WARN rather than FAIL - matching Meta Validate,
+        # the other check that judges the company name. A default run stays exit 0; use --strict
+        # to gate on it.
+        status = "PASS" if not findings else "WARN"
         return CheckResult(self.display_name, status, findings,
                            f"{len(findings)} issue(s)")
 
