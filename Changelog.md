@@ -4,6 +4,23 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.8.2 - 2026-08-14
+
+### Fixed
+
+- **Ansible Lint check reported PASS regardless of findings.** The `-f pep8` output parser required a `rule: message` suffix, but ansible-lint emits `file:line: rule[/]` with no trailing message, so the pattern matched **0 of 2128** output lines on a real role and every repo reported a clean Ansible Lint result. The pattern now treats the message as optional. Verified against Private-Windows-2019-STIG (0 -> 20 findings) and Private-RHEL9-STIG (0 -> 1, matching a direct `ansible-lint` run exactly).
+- **Company Naming could not see the files the company name lives in.** The check scanned only `.yml`, `.yaml`, `.j2`, `.md`, `.py` and `.sh`, so `templates/banner.txt` was never read, and `meta/`, `README.md`, `LICENSE` and `CHANGELOG.md` are excluded by design. `.txt` and `.cfg` are now scanned.
+- **`company_exclude_patterns` shipped with a company name in it.** The default list contained `tyto`, and those patterns suppress an entire line, so any line naming the Tyto Athene parent was skipped before it could be matched. Setting `company_old_names: ["tyto athene"]` therefore produced a rule that could never fire. `tyto` removed, with a note not to list brands there.
+- **`company_old_names` defaulted to the current company.** `mindpoint` was listed as outdated, but MindPoint Group is the company name; the parent changed from Tyto Athene to Quantum Sky. The default is now `tyto athene`. Previously this only stayed quiet because the files printing the name were not scanned.
+- **`exclude_files` was case-sensitive.** It listed `CHANGELOG.md` and `Changelog.md`, but repos in the fleet also track `ChangeLog.md`, which was therefore scanned and flagged. Comparison is now case-insensitive.
+- **Meta Validate hardcoded a single expected company.** A fleet part-way through a rebrand always warned on one side of it. `EXPECTED_COMPANIES` now accepts both the Quantum Sky and Tyto Athene parent names, and a new `expected_company` key in `.qa_config.yml` pins a specific value.
+
+### Note on behaviour change
+
+Repos that previously reported a clean Ansible Lint result will now surface real findings, and repos still carrying the old parent name will now fail Company Naming. Both are true positives that the previous version could not report.
+
+---
+
 ## 2.8.1 - 2026-07-01
 
 ### Added

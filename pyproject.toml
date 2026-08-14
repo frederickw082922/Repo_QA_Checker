@@ -1,6 +1,6 @@
 [project]
 name = "ansible-lockdown-qa-check"
-version = "2.8.1"
+version = "2.8.2"
 description = "Comprehensive QA tool for Ansible-Lockdown CIS/STIG hardening roles"
 readme = "README.md"
 license = {text = "MIT"}

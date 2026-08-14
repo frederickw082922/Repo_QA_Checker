@@ -354,18 +354,24 @@ register_prefixes:
 fqcn_exclude_paths:
   - molecule/
 
-# Outdated company names to flag
+# Outdated company names to flag.
+# Do not list a current brand here. MindPoint Group is the company; the parent changed.
 company_old_names:
-  - mindpoint
+  - tyto athene
 
-# Line patterns that suppress company name findings
+# Line patterns that suppress company name findings.
+# Never list a company name here - it makes that name impossible to flag as outdated.
 company_exclude_patterns:
-  - tyto
   - project
   - author
   - "company:"
   - namespace
   - company_title
+
+# meta/main.yml company values accepted by Meta Validate. Omit to accept the built-in list,
+# which covers both the Quantum Sky and Tyto Athene parent names during the migration.
+expected_company:
+  - MindPoint Group - A Quantum Sky Company
 
 # Minimum severity for reports
 min_severity: info
@@ -390,8 +396,9 @@ If no config file is present, these defaults are used:
 | `spelling_exceptions` | `[]` |
 | `register_prefixes` | `discovered_`, `prelim_`, `pre_audit_`, `post_audit_`, `set_` |
 | `fqcn_exclude_paths` | `molecule/` |
-| `company_old_names` | `mindpoint` |
-| `company_exclude_patterns` | `tyto`, `project`, `author`, `company:`, `namespace`, `company_title` |
+| `company_old_names` | `tyto athene` |
+| `company_exclude_patterns` | `project`, `author`, `company:`, `namespace`, `company_title` |
+| `expected_company` | `null` (accepts the Quantum Sky and Tyto Athene parent names) |
 | `min_severity` | `info` |
 
 ---

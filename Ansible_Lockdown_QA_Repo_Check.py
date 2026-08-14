@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.8.1"
+TOOL_VERSION = "2.8.2"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -403,8 +403,14 @@ class ConfigLoader:
         "spelling_exceptions": [],
         "register_prefixes": list(VALID_REGISTER_PREFIXES),
         "fqcn_exclude_paths": ["molecule/"],
-        "company_old_names": ["mindpoint"],
-        "company_exclude_patterns": ["tyto", "project", "author",
+        # The company is MindPoint Group; what changed is the parent. Listing "mindpoint" here
+        # flags the current, correct name on every repo that prints it in a banner.
+        "company_old_names": ["tyto athene"],
+        # None means "use the built-in accepted list"; set a string or list to pin one value.
+        "expected_company": None,
+        # NOTE: do not put a company name here. These patterns suppress a line entirely,
+        # so listing a brand makes it impossible to ever flag that brand as outdated.
+        "company_exclude_patterns": ["project", "author",
                                      "company:", "namespace",
                                      "company_title"],
         "min_severity": "info",
@@ -755,7 +761,10 @@ class AnsibleLintCheck:
         # Modern ansible-lint pep8 format:
         #   file:line:col: rule[subrule]: message
         #   file:line: rule: message
-        pat = re.compile(r"^(.+?):(\d+)(?::\d+)?: (\S+?):\s+(.+)$")
+        # ansible-lint's pep8 formatter emits "file:line: rule[/]" - the rule id is the last
+        # field and there is no trailing ": message". The older pattern required one, so it
+        # matched nothing and every run reported PASS regardless of findings.
+        pat = re.compile(r"^(.+?):(\d+)(?::\d+)?:\s+(\S+?)(?::\s+(.+))?$")
         for line in output.splitlines():
             m = pat.match(line)
             if m:
@@ -764,12 +773,12 @@ class AnsibleLintCheck:
                 if rule.startswith("Read") or rule.startswith("Failed"):
                     continue
                 # Skip Python warnings captured from stderr (not lint findings)
-                if "ResourceWarning" in m.group(4) or "Warning" in rule:
+                if "ResourceWarning" in (m.group(4) or "") or "Warning" in rule:
                     continue
                 findings.append(Finding(
                     file=m.group(1),
                     line=int(m.group(2)),
-                    description=f"[{rule}] {m.group(4)}",
+                    description=f"[{rule}] {m.group(4) or rule}",
                     severity="warning",
                     check_name="ansiblelint"))
         return findings
@@ -1257,13 +1266,13 @@ class CompanyNamingCheck:
 
     def run(self) -> CheckResult:
         findings: List[Finding] = []
-        old_names = self.scanner.config.get("company_old_names", ["mindpoint"])
+        old_names = self.scanner.config.get("company_old_names", ["tyto athene"])
         if not old_names:
             return CheckResult(self.display_name, "SKIP",
                                summary="No company names configured")
         exclude_pats = self.scanner.config.get(
             "company_exclude_patterns",
-            ["tyto", "project", "author", "company:", "namespace",
+            ["project", "author", "company:", "namespace",
              "company_title"])
         exclude_in_line = re.compile(
             "|".join(re.escape(p) for p in exclude_pats),
@@ -1271,14 +1280,17 @@ class CompanyNamingCheck:
         search_pat = re.compile(
             "|".join(re.escape(n) for n in old_names),
             re.IGNORECASE)
-        exclude_files = {"README.md", "CONTRIBUTING.rst", "LICENSE",
-                         "CHANGELOG.md", "Changelog.md",
-                         os.path.basename(__file__)}
+        # Compared case-insensitively: repos in the fleet variously track CHANGELOG.md,
+        # Changelog.md and ChangeLog.md, and a case-sensitive set misses two of the three.
+        exclude_files = {"readme.md", "contributing.rst", "license",
+                         "changelog.md",
+                         os.path.basename(__file__).lower()}
         files = self.scanner.collect_files(self.scanner.directory,
-                                           {".yml", ".yaml", ".j2", ".md", ".py", ".sh"})
+                                           {".yml", ".yaml", ".j2", ".md", ".py",
+                                            ".sh", ".txt", ".cfg"})
         for fp in files:
             rel = _relpath(fp, self.scanner.directory)
-            if os.path.basename(fp) in exclude_files:
+            if os.path.basename(fp).lower() in exclude_files:
                 continue
             if "meta/" in rel:
                 continue
@@ -1303,7 +1315,11 @@ class MetaValidateCheck:
 
     # Expected values
     EXPECTED_AUTHOR = "Ansible-Lockdown Team"
-    EXPECTED_COMPANY = "MindPoint Group - A Tyto Athene Company"
+    # Accepted while the fleet migrates from the Tyto Athene parent to Quantum Sky. The first
+    # entry is the preferred value and is what a mismatch message suggests. Override per repo
+    # with expected_company in .qa_config.yml.
+    EXPECTED_COMPANIES = ["MindPoint Group - A Quantum Sky Company",
+                          "MindPoint Group - A Tyto Athene Company"]
     MIN_ANSIBLE_VERSION = "2.16.1"
 
     def __init__(self, scanner: RepoScanner):
@@ -1342,10 +1358,13 @@ class MetaValidateCheck:
 
         # Check company
         company = gi.get("company", "")
-        if company != self.EXPECTED_COMPANY:
+        accepted = self.scanner.config.get("expected_company") or self.EXPECTED_COMPANIES
+        if isinstance(accepted, str):
+            accepted = [accepted]
+        if company not in accepted:
             findings.append(Finding(
                 "meta/main.yml", 0,
-                f"company: '{company}' should be '{self.EXPECTED_COMPANY}'",
+                f"company: '{company}' should be '{accepted[0]}'",
                 "warning", "meta_validate"))
 
         # Check min_ansible_version
