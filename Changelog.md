@@ -12,12 +12,15 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 - **Company Naming could not see the files the company name lives in.** The check scanned only `.yml`, `.yaml`, `.j2`, `.md`, `.py` and `.sh`, so `templates/banner.txt` was never read, and `meta/`, `README.md`, `LICENSE` and `CHANGELOG.md` are excluded by design. `.txt` and `.cfg` are now scanned.
 - **`company_exclude_patterns` shipped with a company name in it.** The default list contained `tyto`, and those patterns suppress an entire line, so any line naming the Tyto Athene parent was skipped before it could be matched. Setting `company_old_names: ["tyto athene"]` therefore produced a rule that could never fire. `tyto` removed, with a note not to list brands there.
 - **`company_old_names` defaulted to the current company.** `mindpoint` was listed as outdated, but MindPoint Group is the company name; the parent changed from Tyto Athene to Quantum Sky. The default is now `tyto athene`. Previously this only stayed quiet because the files printing the name were not scanned.
+- **`LICENSE` was never scanned, by two separate mechanisms.** It was listed in `exclude_files`, and it has no file extension so `collect_files` would not have returned it anyway. Its copyright holder line is one of the few places the company name is written. It is now removed from the exclusions and added explicitly, along with `LICENSE.md`, `LICENSE.txt` and `NOTICE`.
 - **`exclude_files` was case-sensitive.** It listed `CHANGELOG.md` and `Changelog.md`, but repos in the fleet also track `ChangeLog.md`, which was therefore scanned and flagged. Comparison is now case-insensitive.
 - **Meta Validate hardcoded a single expected company.** A fleet part-way through a rebrand always warned on one side of it. `EXPECTED_COMPANIES` now accepts both the Quantum Sky and Tyto Athene parent names, and a new `expected_company` key in `.qa_config.yml` pins a specific value.
 
 ### Note on behaviour change
 
 Repos that previously reported a clean Ansible Lint result will now surface real findings, and repos still carrying the old parent name will now fail Company Naming. Both are true positives that the previous version could not report.
+
+Measured against the local fleet at the time of writing: **30 of 37 repos with a LICENSE still name the Tyto Athene parent** and will newly fail Company Naming. Five have already been updated to Quantum Sky and pass. The failures are the outstanding half of a rebrand that is already in progress, so the check now functions as the worklist for it rather than as noise.
 
 ---
 

@@ -397,6 +397,7 @@ If no config file is present, these defaults are used:
 | `register_prefixes` | `discovered_`, `prelim_`, `pre_audit_`, `post_audit_`, `set_` |
 | `fqcn_exclude_paths` | `molecule/` |
 | `company_old_names` | `tyto athene` |
+| _(scan scope)_ | `.yml .yaml .j2 .md .py .sh .txt .cfg`, plus `LICENSE`, `LICENSE.md`, `LICENSE.txt`, `NOTICE` |
 | `company_exclude_patterns` | `project`, `author`, `company:`, `namespace`, `company_title` |
 | `expected_company` | `null` (accepts the Quantum Sky and Tyto Athene parent names) |
 | `min_severity` | `info` |

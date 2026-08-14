@@ -1282,12 +1282,20 @@ class CompanyNamingCheck:
             re.IGNORECASE)
         # Compared case-insensitively: repos in the fleet variously track CHANGELOG.md,
         # Changelog.md and ChangeLog.md, and a case-sensitive set misses two of the three.
-        exclude_files = {"readme.md", "contributing.rst", "license",
+        # LICENSE is deliberately NOT excluded. Its copyright holder line is one of the few
+        # places the company name is actually written, so excluding it defeated the check.
+        exclude_files = {"readme.md", "contributing.rst",
                          "changelog.md",
                          os.path.basename(__file__).lower()}
         files = self.scanner.collect_files(self.scanner.directory,
                                            {".yml", ".yaml", ".j2", ".md", ".py",
                                             ".sh", ".txt", ".cfg"})
+        # LICENSE has no extension, so collect_files never returns it. Its copyright holder
+        # line is one of the few places the company name is written, so add it explicitly.
+        for extra in ("LICENSE", "LICENSE.md", "LICENSE.txt", "NOTICE"):
+            cand = os.path.join(self.scanner.directory, extra)
+            if os.path.isfile(cand) and cand not in files:
+                files.append(cand)
         for fp in files:
             rel = _relpath(fp, self.scanner.directory)
             if os.path.basename(fp).lower() in exclude_files:
