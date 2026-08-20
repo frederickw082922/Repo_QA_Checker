@@ -528,14 +528,19 @@ def extract_task_data(tasks_dir: str, benchmark_type: str,
     if os.path.isdir(tasks_dir):
         for entry in sorted(os.listdir(tasks_dir)):
             full = os.path.join(tasks_dir, entry)
-            if os.path.isdir(full) and (entry.startswith("cat_") or
-                                         entry.startswith("section_")):
+            # Accept Cat1, Cat_1, cat_1, section_3 - STIG roles vary in case and
+            # separator, and a startswith("cat_") test silently matched none of the
+            # Cat<N> roles, leaving task_map empty and three checks vacuous.
+            if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
                 task_subdirs.append(entry)
 
     for subdir_name in task_subdirs:
         cat_path = os.path.join(tasks_dir, subdir_name)
         # Extract numeric portion: cat_1 -> 1, section_3 -> 3
-        cat_num = int(subdir_name.split("_", 1)[1]) if "_" in subdir_name else 0
+        # Trailing digits, so Cat1 and cat_1 both yield 1 (splitting on "_"
+        # gave 0 for every Cat<N> directory).
+        _cm = re.search(r"(\d+)$", subdir_name)
+        cat_num = int(_cm.group(1)) if _cm else 0
 
         for fname in sorted(os.listdir(cat_path)):
             if not fname.endswith(".yml") or fname == "main.yml":
@@ -734,8 +739,7 @@ def _find_audit_subdirs(audit_dir: str) -> List[str]:
         return subdirs
     for entry in sorted(os.listdir(audit_dir)):
         full = os.path.join(audit_dir, entry)
-        if os.path.isdir(full) and (entry.startswith("cat_") or
-                                     entry.startswith("section_")):
+        if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
             subdirs.append(full)
     return subdirs
 
@@ -2069,8 +2073,7 @@ def extract_task_automation_status(
     if os.path.isdir(tasks_dir):
         for entry in sorted(os.listdir(tasks_dir)):
             full = os.path.join(tasks_dir, entry)
-            if os.path.isdir(full) and (entry.startswith("section_") or
-                                         entry.startswith("cat_")):
+            if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
                 task_subdirs.append(entry)
 
     for subdir_name in task_subdirs:
@@ -2178,8 +2181,7 @@ def extract_audit_test_depth(
     audit_subdirs: List[str] = []
     for entry in sorted(os.listdir(audit_dir)):
         full = os.path.join(audit_dir, entry)
-        if os.path.isdir(full) and (entry.startswith("section_") or
-                                     entry.startswith("cat_")):
+        if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
             audit_subdirs.append(full)
 
     for subdir in audit_subdirs:
@@ -2263,8 +2265,7 @@ def extract_task_paths(
     if os.path.isdir(tasks_dir):
         for entry in sorted(os.listdir(tasks_dir)):
             full = os.path.join(tasks_dir, entry)
-            if os.path.isdir(full) and (entry.startswith("section_") or
-                                         entry.startswith("cat_")):
+            if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
                 task_subdirs.append(entry)
 
     for subdir_name in task_subdirs:
