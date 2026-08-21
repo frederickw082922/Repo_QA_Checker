@@ -40,6 +40,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, asdict
@@ -50,7 +51,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.8.1"
+VERSION = "2.8.4"
 
 BENCHMARK_STIG = "stig"
 BENCHMARK_CIS = "cis"
@@ -3442,7 +3443,25 @@ def main() -> None:
     log = (lambda msg: print(f"  [*] {msg}", file=sys.stderr)) if args.verbose else (lambda _msg: None)
 
     # Paths
+    # Ansible accepts either defaults/main.yml or a defaults/main/ directory. The ten
+    # helpers below each open() a single path, so for the directory layout concatenate
+    # the files into one temporary view rather than change every signature. Without
+    # this every one of them silently reads nothing and their checks pass vacuously.
+    # Caveat: line numbers in findings then refer to the concatenation, not the file.
     defaults_path = os.path.join(remediation_dir, "defaults", "main.yml")
+    if not os.path.isfile(defaults_path):
+        _dir = os.path.join(remediation_dir, "defaults", "main")
+        if os.path.isdir(_dir):
+            _parts = []
+            for _f in sorted(os.listdir(_dir)):
+                if _f.endswith((".yml", ".yaml")):
+                    with open(os.path.join(_dir, _f), "r", encoding="utf-8") as _fh:
+                        _parts.append(_fh.read())
+            _tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yml", delete=False, encoding="utf-8")
+            _tmp.write("\n".join(_parts))
+            _tmp.close()
+            defaults_path = _tmp.name
     # Bridge (audit-vars) template: the New Alignment Strategy renamed
     # ansible_vars_goss.yml.j2 -> lockdown_audit.yml.j2. Resolve whichever
     # exists (prefer the new name), falling back to the legacy name for older repos.
