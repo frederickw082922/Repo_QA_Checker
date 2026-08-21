@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.8.3"
+TOOL_VERSION = "2.8.4"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -287,6 +287,37 @@ def discover_qa_artifact_paths(directory: str) -> Set[str]:
     return paths
 
 
+def defaults_files(role_dir: str) -> List[str]:
+    """Return the role's defaults file(s).
+
+    Ansible accepts either a single ``defaults/main.yml`` or a ``defaults/main/``
+    directory, in which case every YAML file inside it is loaded. Sorted so callers
+    see the same order Ansible does (alphabetical), which matters because a key
+    defined in two files resolves to whichever loads last.
+    """
+    base = os.path.join(role_dir, "defaults")
+    single = os.path.join(base, "main.yml")
+    if os.path.isfile(single):
+        return [single]
+    as_dir = os.path.join(base, "main")
+    if os.path.isdir(as_dir):
+        return sorted(
+            os.path.join(as_dir, f)
+            for f in os.listdir(as_dir)
+            if f.endswith((".yml", ".yaml"))
+        )
+    return []
+
+
+def defaults_label(role_dir: str) -> str:
+    """Reporting label for the defaults location, for finding messages."""
+    files = defaults_files(role_dir)
+    if len(files) == 1 and os.path.basename(files[0]) == "main.yml" \
+            and os.path.basename(os.path.dirname(files[0])) == "defaults":
+        return "defaults/main.yml"
+    return "defaults/main/"
+
+
 def _relpath(filepath: str, base: str) -> str:
     """Return a clean relative path for display."""
     try:
@@ -513,9 +544,9 @@ class RepoScanner:
         of 1-3 underscore-delimited parts and vote for each. Shorter prefixes
         naturally accumulate more votes, producing the common root prefix.
         """
-        defaults = os.path.join(self.directory, "defaults", "main.yml")
         counter: Counter = Counter()
-        for line in self.read_lines(defaults):
+        for line in (l for f in defaults_files(self.directory)
+                     for l in self.read_lines(f)):
             s = line.rstrip()
             if not s or s.startswith("#") or s[0] in (" ", "\t"):
                 continue
@@ -548,13 +579,13 @@ class RepoScanner:
         """
         if not self.benchmark_prefix:
             return "cis"
-        defaults = os.path.join(self.directory, "defaults", "main.yml")
         rule_pat = re.compile(rf"^{re.escape(self.benchmark_prefix)}_rule_\d")
         stig_pat = re.compile(
             rf"^{re.escape(self.benchmark_prefix)}_\d{{6}}\s*:")
         cis_count = 0
         stig_count = 0
-        for line in self.read_lines(defaults):
+        for line in (l for f in defaults_files(self.directory)
+                     for l in self.read_lines(f)):
             stripped = line.strip()
             if rule_pat.match(stripped):
                 cis_count += 1
@@ -564,8 +595,8 @@ class RepoScanner:
 
     def get_benchmark_version(self) -> str:
         """Extract benchmark_version from defaults/main.yml."""
-        defaults = os.path.join(self.directory, "defaults", "main.yml")
-        for line in self.read_lines(defaults):
+        for line in (l for f in defaults_files(self.directory)
+                     for l in self.read_lines(f)):
             m = re.match(r"^benchmark_version:\s*['\"]?([^'\"#\n]+)", line)
             if m:
                 return m.group(1).strip()
@@ -940,7 +971,7 @@ class UnusedVarCheck:
         """Return {var_name: (relative_file, line)} from all var sources."""
         result: Dict[str, Tuple[str, int]] = {}
         sources = [
-            os.path.join(self.d, "defaults", "main.yml"),
+            *defaults_files(self.d),
             os.path.join(self.d, "vars", "main.yml"),
             os.path.join(self.d, "vars", "audit.yml"),
         ]
@@ -980,7 +1011,7 @@ class UnusedVarCheck:
 
         # Phase 2: collect tokens from var files (excluding definition lines)
         var_files = [
-            os.path.join(self.d, "defaults", "main.yml"),
+            *defaults_files(self.d),
             os.path.join(self.d, "vars", "main.yml"),
             os.path.join(self.d, "vars", "audit.yml"),
         ]
@@ -1071,8 +1102,8 @@ class UnusedVarCheck:
                         in_vars_block = False
 
         all_defined = set(defined.keys()) | dynamic_vars | ANSIBLE_BUILTINS
-        defaults_path = os.path.join(self.d, "defaults", "main.yml")
-        for raw in self.scanner.read_lines(defaults_path):
+        for raw in (l for f in defaults_files(self.d)
+                    for l in self.scanner.read_lines(f)):
             cm = re.match(r"^#\s*(" + re.escape(prefix) + r"\w+):", raw)
             if cm:
                 all_defined.add(cm.group(1))
@@ -1224,23 +1255,31 @@ class VarNamingCheck:
 
     def _duplicate_defaults(self) -> List[Finding]:
         findings: List[Finding] = []
-        defaults = os.path.join(self.d, "defaults", "main.yml")
-        seen: Dict[str, int] = {}
-        for num, raw in enumerate(self.scanner.read_lines(defaults), 1):
-            s = raw.rstrip()
-            if not s or s.startswith("#") or s[0] in (" ", "\t"):
-                continue
-            m = re.match(r"^([a-zA-Z_]\w*):", s)
-            if m:
+        # A defaults/main/ directory introduces a second way to duplicate a key: the
+        # same name in two different files. Ansible loads them alphabetically, so the
+        # later file silently wins. Track (file, line) to report both cases.
+        seen: Dict[str, Tuple[str, int]] = {}
+        for path in defaults_files(self.d):
+            rel = _relpath(path, self.d)
+            for num, raw in enumerate(self.scanner.read_lines(path), 1):
+                s = raw.rstrip()
+                if not s or s.startswith("#") or s[0] in (" ", "\t"):
+                    continue
+                m = re.match(r"^([a-zA-Z_]\w*):", s)
+                if not m:
+                    continue
                 var = m.group(1)
                 if var in seen:
+                    prev_file, prev_line = seen[var]
+                    where = (f"line {prev_line}" if prev_file == rel
+                             else f"{prev_file}:{prev_line}")
                     findings.append(Finding(
-                        "defaults/main.yml", num,
+                        rel, num,
                         f"Duplicate default variable '{var}' "
-                        f"(first defined at line {seen[var]})",
+                        f"(first defined at {where})",
                         "warning", "var_naming"))
                 else:
-                    seen[var] = num
+                    seen[var] = (rel, num)
         return findings
 
 
@@ -1858,8 +1897,9 @@ class RuleCoverageCheck:
 
         # Collect defined rule vars from defaults/main.yml
         defined_rules: Dict[str, int] = {}
-        defaults = os.path.join(self.d, "defaults", "main.yml")
-        for num, line in enumerate(self.scanner.read_lines(defaults), 1):
+        for num, line in enumerate(
+                (l for f in defaults_files(self.d)
+                 for l in self.scanner.read_lines(f)), 1):
             m = rule_pat.match(line.rstrip())
             if m:
                 defined_rules[m.group(1)] = num
@@ -2625,7 +2665,7 @@ def _resolve_directory(user_dir: Optional[str]) -> str:
             sys.exit(1)
         return resolved
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    if os.path.isfile(os.path.join(script_dir, "defaults", "main.yml")):
+    if defaults_files(script_dir):
         return script_dir
     return os.path.abspath(os.getcwd())
 
@@ -2704,9 +2744,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     directory = _resolve_directory(args.directory)
-    defaults = os.path.join(directory, "defaults", "main.yml")
-    if not os.path.isfile(defaults):
-        print(f"Error: '{defaults}' not found. "
+    if not defaults_files(directory):
+        print(f"Error: no defaults found in '{os.path.join(directory, 'defaults')}' "
+              "(expected main.yml or a main/ directory). "
               "Are you in an Ansible role directory?\n"
               "Use -d /path/to/role to specify the role directory.",
               file=sys.stderr)
