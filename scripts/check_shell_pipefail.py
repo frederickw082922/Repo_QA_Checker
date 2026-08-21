@@ -59,9 +59,26 @@ def _load_scan_module():
     return mod
 
 
+
+def _defaults_files(role_path):
+    """defaults/main.yml, or every YAML file in a defaults/main/ directory.
+
+    Ansible accepts either shape; sorted to match its alphabetical load order.
+    """
+    _b = os.path.join(role_path, "defaults")
+    _s = os.path.join(_b, "main.yml")
+    if os.path.isfile(_s):
+        return [_s]
+    _d = os.path.join(_b, "main")
+    if os.path.isdir(_d):
+        return sorted(os.path.join(_d, f) for f in os.listdir(_d)
+                      if f.endswith((".yml", ".yaml")))
+    return []
+
 def discover_shell_executable_var(role_path: str) -> str | None:
-    for rel in ("vars/main.yml", "defaults/main.yml"):
-        fpath = os.path.join(role_path, rel)
+    candidates = [os.path.join(role_path, "vars", "main.yml")]
+    candidates += _defaults_files(role_path)
+    for fpath in candidates:
         if not os.path.isfile(fpath):
             continue
         with open(fpath, encoding="utf-8") as fh:
@@ -79,7 +96,8 @@ def _find_roles(root: str) -> list[str]:
             d for d in dirnames
             if d not in {".git", "__pycache__", ".github", "collections", "molecule"}
         ]
-        if "main.yml" in filenames and os.path.basename(dirpath) == "defaults":
+        if (os.path.basename(dirpath) == "defaults"
+                and ("main.yml" in filenames or "main" in dirnames)):
             role = os.path.dirname(dirpath)
             if os.path.isdir(os.path.join(role, "tasks")):
                 roles.append(role)
@@ -104,7 +122,7 @@ def check_role(role_path: str, scan_mod) -> RoleReport:
     if not exec_var:
         report.issues.append(Issue(
             severity="warning",
-            message="No *_shell_executable variable in vars/main.yml or defaults/main.yml",
+            message="No *_shell_executable variable in vars/main.yml or the role defaults",
             file="vars/main.yml",
         ))
 
@@ -304,7 +322,7 @@ def main() -> None:
                 print()
         sys.exit(1 if any(r.issues for r in reports) else 0)
 
-    if not os.path.isfile(os.path.join(root, "defaults", "main.yml")):
+    if not _defaults_files(root):
         print(f"Error: {root} does not look like a role (no defaults/main.yml)", file=sys.stderr)
         sys.exit(2)
 
