@@ -1,5 +1,15 @@
 # Roadmap: Expose `ansible-lockdown-qa-check` as a pre-commit Hook
 
+> **Status: delivered. Kept for historical context only.**
+>
+> The hook described below ships: see `.pre-commit-hooks.yaml` in the repo root, which defines the
+> `ansible-lockdown-qa` hook id, and the **pre-commit Integration** section of `README.md` for current
+> consumer instructions.
+>
+> Version numbers and `rev:` pins in this document reflect the 2.2.0 era and are **not** current. Do
+> not copy the snippets here into a `.pre-commit-config.yaml`; take them from `README.md`, which is
+> kept up to date with the released tag.
+
 ## Goal
 
 Allow consumers (Ansible-Lockdown role repositories) to add this tool as a
