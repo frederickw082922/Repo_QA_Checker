@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.8.5"
+TOOL_VERSION = "2.8.4"
 
 # ---------------------------------------------------------------------------
 # Data classes
