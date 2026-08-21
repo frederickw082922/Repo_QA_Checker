@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import os
+import tempfile
 import re
 import sys
 from collections import Counter
@@ -46,9 +47,36 @@ ORCHESTRATION_FILES = {
 }
 
 
+def _defaults_view(role_path):
+    """Return one readable path covering the role's defaults.
+
+    Ansible accepts either defaults/main.yml or a defaults/main/ directory. For the
+    directory shape, concatenate the files into a temporary view so callers that open
+    a single path keep working. Line numbers in findings then refer to the
+    concatenation rather than the individual file, which is the trade for having these
+    checks run at all instead of silently reading nothing.
+    """
+    single = os.path.join(role_path, "defaults", "main.yml")
+    if os.path.isfile(single):
+        return single
+    as_dir = os.path.join(role_path, "defaults", "main")
+    if not os.path.isdir(as_dir):
+        return single  # caller's isfile() guard reports it missing
+    parts = []
+    for name in sorted(os.listdir(as_dir)):
+        if name.endswith((".yml", ".yaml")):
+            with open(os.path.join(as_dir, name), encoding="utf-8") as fh:
+                parts.append(fh.read())
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False,
+                                      encoding="utf-8")
+    tmp.write("\n".join(parts))
+    tmp.close()
+    return tmp.name
+
+
 def detect_benchmark_type(repo_path):
     """Auto-detect benchmark type and prefix from defaults/main.yml."""
-    defaults_file = os.path.join(repo_path, "defaults", "main.yml")
+    defaults_file = _defaults_view(repo_path)
     if not os.path.isfile(defaults_file):
         return None, None
 

@@ -4,6 +4,43 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.8.4 - 2026-08-21
+
+### Added
+
+- **A role's defaults may now be a `defaults/main/` directory, not only `defaults/main.yml`.** Ansible
+  has always accepted either shape, loading every YAML file in the directory, but this tool looked for
+  the single file and aborted before running a check when it was absent:
+  `Error: 'defaults/main.yml' not found. Are you in an Ansible role directory?` A shared resolver now
+  returns the file, or every YAML file in the directory sorted to match Ansible's alphabetical load
+  order. Routed through all 10 sites in the main script and through five helper checks that carried the
+  same assumption independently: `check_audit_vars.py`, `check_shell_pipefail.py`,
+  `check_rule_coverage.py`, `check_tags_completeness.py` and `check_var_naming.py`.
+- **Duplicate-key detection now reports a key defined in two different files** inside `defaults/main/`.
+  That is a failure mode the directory layout creates and the single-file layout could not have: Ansible
+  loads the files alphabetically, so the later one silently wins.
+
+### Changed
+
+- **CHECK B in the audit-variable check is now layout-aware.** It forbids role-internal audit constants
+  in `defaults/`, which is correct for the two-tier layout where `vars/audit.yml` holds them. A role that
+  has consolidated every audit variable into `defaults/` and dropped `vars/audit.yml` is single-tier by
+  design, and flagging all 21 constants there is noise rather than a finding. The layout is now detected
+  rather than assumed, so both shapes validate correctly and neither needs its findings baselined away.
+
+### Fixed
+
+- **The cross-repo validator extracted zero task-side rules for every `Cat<N>` role.** Subdirectory
+  discovery was gated on `entry.startswith("cat_")` at five separate sites, which matches `cat_1` but
+  not `Cat1` or `Cat_1`. That silently emptied the task side for nine STIG repos, leaving
+  `Rule Key Consistency`, `Category Alignment` and `File Path Alignment` reporting PASS while comparing
+  nothing. The companion line derived the CAT number by splitting on `_`, yielding 0 for every `Cat<N>`
+  directory. Regression checked across layouts: a `cat_`/`section_` CIS role stays at 306 rules and an
+  `cat_` STIG role at 187, while `Cat` and `Cat_` roles go from 0 to 188 and 355.
+- **The cross-repo validator aborted its own checks on a defaults directory.** Ten of its helpers open a
+  single defaults path; for the directory layout it now builds one concatenated view so they run instead
+  of silently reading nothing. Line numbers in those findings refer to the concatenation.
+
 ## 2.8.3 - 2026-08-14
 
 ### Fixed
