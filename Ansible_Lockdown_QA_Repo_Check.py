@@ -243,6 +243,51 @@ ANSIBLE_BUILTIN_MODULES: Set[str] = {
     "yum", "yum_repository",
 }
 
+# Windows module short names mapped to their collection. No ansible.builtin
+# module starts with "win_", so a bare win_* task key is always non-FQCN - the
+# prefix itself is the signal and this map only supplies the remediation text.
+# Deliberately limited to modules whose collection is unambiguous in the roles
+# themselves rather than a hand-copied catalogue: win_audit_policy_system is
+# omitted because the fleet uses it under both ansible.windows and
+# community.windows, so naming one would be a guess.
+WINDOWS_MODULE_COLLECTIONS: Dict[str, str] = {
+    "setup": "ansible.windows",
+    "win_acl": "ansible.windows",
+    "win_acl_inheritance": "ansible.windows",
+    "win_command": "ansible.windows",
+    "win_feature": "ansible.windows",
+    "win_file": "ansible.windows",
+    "win_find": "ansible.windows",
+    "win_optional_feature": "ansible.windows",
+    "win_reboot": "ansible.windows",
+    "win_reg_stat": "ansible.windows",
+    "win_regedit": "ansible.windows",
+    "win_service": "ansible.windows",
+    "win_service_info": "ansible.windows",
+    "win_shell": "ansible.windows",
+    "win_stat": "ansible.windows",
+    "win_template": "ansible.windows",
+    "win_user": "ansible.windows",
+    "win_user_right": "ansible.windows",
+    "win_disk_facts": "community.windows",
+    "win_security_policy": "community.windows",
+}
+
+
+def _fqcn_suggestion(key: str) -> str:
+    """Remediation text for a bare module name."""
+    if key in ANSIBLE_BUILTIN_MODULES:
+        return f"'ansible.builtin.{key}'"
+    collection = WINDOWS_MODULE_COLLECTIONS.get(key)
+    if collection:
+        return f"'{collection}.{key}'"
+    return "a fully qualified name (ansible.windows.* or community.windows.*)"
+
+
+def _is_bare_module(key: str) -> bool:
+    """True when a task-level key is an unqualified module name."""
+    return key in ANSIBLE_BUILTIN_MODULES or key.startswith("win_")
+
 # Ansible task-level keywords (NOT module names)
 TASK_KEYWORDS: Set[str] = {
     "name", "when", "register", "tags", "vars", "block", "rescue", "always",
@@ -307,6 +352,54 @@ def defaults_files(role_dir: str) -> List[str]:
             if f.endswith((".yml", ".yaml"))
         )
     return []
+
+
+WINDOWS_COLLECTION_PREFIXES = ("ansible.windows.", "community.windows.")
+
+
+def is_windows_role(role_dir: str) -> bool:
+    """True when the role targets Windows.
+
+    Windows roles differ structurally from the Linux Ansible-Lockdown roles:
+    they have no ``vars/audit.yml``, no paired goss audit repo, and use
+    ``ansible.windows`` modules rather than POSIX shell. Checks that are
+    meaningless against that shape consult this so they can skip themselves,
+    instead of every Windows repo having to hand-write ``skip_checks``.
+
+    Primary signal is a declared Windows platform in ``meta/main.yml``, which
+    both the top-level and ``galaxy_info``-nested layouts express. Falls back
+    to Windows module usage so a role with absent or malformed meta still
+    classifies.
+    """
+    meta = os.path.join(role_dir, "meta", "main.yml")
+    if os.path.isfile(meta):
+        # _load_yaml_file keeps PyYAML optional, as the rest of the tool does.
+        data = _load_yaml_file(meta)
+        if isinstance(data, dict):
+            src = data.get("galaxy_info") or data
+            if isinstance(src, dict):
+                for entry in src.get("platforms") or []:
+                    if isinstance(entry, dict) and str(
+                            entry.get("name", "")).strip().lower() == "windows":
+                        return True
+
+    for sub in ("tasks", "handlers"):
+        path = os.path.join(role_dir, sub)
+        if not os.path.isdir(path):
+            continue
+        for root, _, files in os.walk(path):
+            for fname in files:
+                if not fname.endswith((".yml", ".yaml")):
+                    continue
+                try:
+                    with open(os.path.join(root, fname), "r",
+                              encoding="utf-8", errors="replace") as fh:
+                        content = fh.read()
+                except OSError:
+                    continue
+                if any(p in content for p in WINDOWS_COLLECTION_PREFIXES):
+                    return True
+    return False
 
 
 def defaults_label(role_dir: str) -> str:
@@ -489,8 +582,17 @@ class RepoScanner:
         self._files_cache: Dict[str, List[str]] = {}
         self._cache_lock = threading.Lock()
         self.status = StatusLine(enabled=progress)
-        self.benchmark_prefix = benchmark_prefix or self._auto_detect_prefix()
-        self.benchmark_type = self._detect_benchmark_type()
+        shared_prefix, shared_type = self._shared_detect()
+        self.benchmark_prefix = (benchmark_prefix or shared_prefix
+                                 or self._auto_detect_prefix())
+        if benchmark_prefix or not shared_type:
+            # An explicit -b, or a shape the shared detector does not know:
+            # derive the type locally for whatever prefix we ended up with.
+            self.benchmark_type = self._detect_benchmark_type()
+        else:
+            self.benchmark_type = shared_type
+        # Consulted by the three checks that have no Windows meaning.
+        self.is_windows = is_windows_role(directory)
 
     # -- file cache ---------------------------------------------------------
 
@@ -570,6 +672,23 @@ class RepoScanner:
 
     def get_repo_name(self) -> str:
         return os.path.basename(os.path.abspath(self.directory))
+
+    def _shared_detect(self) -> Tuple[str, str]:
+        """Prefix and benchmark type from the shared detector in scripts/.
+
+        ``scripts/check_rule_coverage.py`` owns the authoritative toggle-shape
+        patterns, including the Windows ``{prefix}_{family}_{6digits}`` form.
+        Keeping a second, weaker copy here is what let Rule Coverage silently
+        examine zero toggles on the roles whose prefix has an extra segment.
+        Returns ("", "") when the helper is unavailable or cannot decide, and
+        the caller falls back to the local detection.
+        """
+        try:
+            checker = _load_check_rule_coverage_module()
+            prefix, bm_type = checker.detect_prefix_and_type(self.directory)
+        except (ImportError, OSError, AttributeError):
+            return "", ""
+        return prefix or "", bm_type or ""
 
     def _detect_benchmark_type(self) -> str:
         """Detect whether this is a CIS or STIG benchmark.
@@ -1536,6 +1655,13 @@ class AuditTemplateCheck:
         return findings
 
     def run(self) -> CheckResult:
+        if self.scanner.is_windows:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary="Windows role: no goss audit bridge template "
+                        "(templates/lockdown_audit.yml.j2) exists",
+            )
+
         findings: List[Finding] = []
         templates_dir = os.path.join(self.scanner.directory, "templates")
         scanned: List[str] = []
@@ -1556,6 +1682,22 @@ class AuditTemplateCheck:
         status = "PASS" if not findings else "FAIL"
         summary = f"{len(findings)} issue(s) in {', '.join(scanned)}"
         return CheckResult(self.display_name, status, findings, summary)
+
+
+def _load_check_rule_coverage_module():
+    """Import scripts/check_rule_coverage.py without installing a package."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "scripts",
+        "check_rule_coverage.py",
+    )
+    spec = importlib.util.spec_from_file_location("_check_rule_coverage", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load rule coverage checker from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_check_audit_vars_module():
@@ -1582,6 +1724,14 @@ class AuditVarsCheck:
         self.scanner = scanner
 
     def run(self) -> CheckResult:
+        if self.scanner.is_windows:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary="Windows role: the audit_* variable family belongs to "
+                        "roles paired with a goss audit repo; there is no "
+                        "working Windows audit",
+            )
+
         try:
             checker = _load_check_audit_vars_module()
         except ImportError as exc:
@@ -1637,6 +1787,14 @@ class ShellPipefailCheck:
         self.scanner = scanner
 
     def run(self) -> CheckResult:
+        if self.scanner.is_windows:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary="Windows role: POSIX 'set -o pipefail' and "
+                        "args.executable have no meaning for "
+                        "ansible.windows.win_shell",
+            )
+
         try:
             checker = _load_check_shell_pipefail_module()
             scan_mod = checker._load_scan_module()
@@ -1708,11 +1866,11 @@ class FQCNCheck:
                     if um:
                         task_indent = len(um.group(1)) + 2
                         key = um.group(2)
-                        if key in ANSIBLE_BUILTIN_MODULES and key not in TASK_KEYWORDS:
+                        if _is_bare_module(key) and key not in TASK_KEYWORDS:
                             findings.append(Finding(
                                 rel, num,
                                 f"Non-FQCN module: '{key}' -> "
-                                f"'ansible.builtin.{key}'",
+                                f"{_fqcn_suggestion(key)}",
                                 "warning", "fqcn"))
                         continue
 
@@ -1728,11 +1886,11 @@ class FQCNCheck:
                     km = re.match(r"^(\s+)([a-z][a-z0-9_]*):\s", raw)
                     if km and len(km.group(1)) == task_indent:
                         key = km.group(2)
-                        if key in ANSIBLE_BUILTIN_MODULES and key not in TASK_KEYWORDS:
+                        if _is_bare_module(key) and key not in TASK_KEYWORDS:
                             findings.append(Finding(
                                 rel, num,
                                 f"Non-FQCN module: '{key}' -> "
-                                f"'ansible.builtin.{key}'",
+                                f"{_fqcn_suggestion(key)}",
                                 "warning", "fqcn"))
         status = "PASS" if not findings else "WARN"
         return CheckResult(self.display_name, status, findings,
@@ -1882,9 +2040,18 @@ class RuleCoverageCheck:
             return CheckResult(self.display_name, "SKIP",
                                summary="No benchmark prefix detected")
 
-        # Build pattern based on benchmark type (CIS vs STIG)
+        # Build pattern based on benchmark type (CIS vs STIG vs Windows STIG)
         bm_type = self.scanner.benchmark_type
-        if bm_type == "stig":
+        if bm_type == "stig_win":
+            # Windows toggles carry a 2-character family segment between the
+            # prefix and the id, e.g. wn11_cc_000010.
+            rule_pat = re.compile(
+                rf"^({re.escape(prefix)}_[a-z0-9]{{2}}_\d{{6}})\s*:",
+                re.IGNORECASE)
+            ref_pat = re.compile(
+                rf"\b({re.escape(prefix)}_[a-z0-9]{{2}}_\d{{6}})\b",
+                re.IGNORECASE)
+        elif bm_type == "stig":
             rule_pat = re.compile(
                 rf"^({re.escape(prefix)}_\d{{6}})\s*:")
             ref_pat = re.compile(
@@ -1917,6 +2084,17 @@ class RuleCoverageCheck:
                     rule = rm.group(1)
                     if rule not in referenced_rules:
                         referenced_rules[rule] = (rel, num)
+
+        # No silent vacuum. Finding nothing on either side means the toggle
+        # shape was not recognised, not that the role is clean: comparing two
+        # empty sets yields no discrepancy and would otherwise report PASS.
+        # That is how this check went unnoticed while examining zero toggles.
+        if not defined_rules and not referenced_rules:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary=f"No '{prefix}' rule toggles recognised "
+                        f"(benchmark type '{bm_type}') - nothing was compared",
+            )
 
         # Orphaned: defined but never used in tasks
         for rule in sorted(defined_rules):

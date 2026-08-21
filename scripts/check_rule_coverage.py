@@ -5,14 +5,16 @@ Works with any ansible-lockdown benchmark role (CIS, STIG, any OS).
 Auto-detects the benchmark prefix and type from defaults/main.yml.
 
 Supported toggle formats:
-- CIS:  {prefix}_rule_{section}  (e.g. ubtu20cis_rule_1_1_1_1)
-- STIG: {prefix}_{6digits}       (e.g. rhel_08_010000, az2023stig_001010)
+- CIS:      {prefix}_rule_{section}       (e.g. ubtu20cis_rule_1_1_1_1)
+- STIG:     {prefix}_{6digits}            (e.g. rhel_09_211010, az2023stig_001010)
+- STIG/Win: {prefix}_{family}_{6digits}   (e.g. wn11_cc_000010, wn11_00_000030)
 
 The prefix is auto-detected by finding the most common pattern among
 top-level variables in defaults/main.yml.
 
 Usage:
-    python check_rule_coverage.py <repo_path> [--prefix PREFIX] [--type cis|stig]
+    python check_rule_coverage.py <repo_path> [--prefix PREFIX]
+        [--type cis|stig|stig_win]
 """
 
 import argparse
@@ -54,8 +56,20 @@ def detect_prefix_and_type(repo_path):
     """Auto-detect the benchmark prefix and type from defaults/main.yml.
 
     Returns (prefix, benchmark_type) where:
-    - CIS:  prefix like 'ubtu20cis', type='cis'
-    - STIG: prefix like 'rhel_08', type='stig'
+    - CIS:      prefix like 'ubtu20cis', type='cis'
+    - STIG:     prefix like 'rhel_09', type='stig'
+    - STIG/Win: prefix like 'wn11', type='stig_win'
+
+    The Windows STIG roles name toggles {prefix}_{family}_{6digits} where the
+    family segment is usually alphabetic (wn11_cc_000010). Pattern A below only
+    matches a numeric family, so on a Windows role it latches onto the single
+    numeric family (wn11_00) and silently scopes the run to that slice. Pattern
+    C recognises the full shape.
+
+    Pattern C is applied only when it covers strictly more toggles than Pattern
+    A. That matters because both match the Linux 'rhel_09_211010' shape - A
+    yields 'rhel_09' and C would yield 'rhel' - so a tie must stay with A or
+    every rhel_NN role would silently change prefix.
     """
     defaults_file = _defaults_view(repo_path)
     if not os.path.isfile(defaults_file):
@@ -71,6 +85,12 @@ def detect_prefix_and_type(repo_path):
     # Pattern B: prefix ending in "stig" followed by _6digits (e.g. az2023stig_001010)
     stig_pattern_b = re.compile(r'^(\w*stig)_(\d{6})\s*:', re.IGNORECASE)
     stig_prefixes = Counter()
+
+    # Pattern C: Windows shape - prefix, 2-char alphanumeric family, 6 digits
+    # (e.g. wn11_cc_000010, wn11_00_000030)
+    stig_pattern_c = re.compile(r'^(\w+?)_([a-z0-9]{2})_(\d{6})\s*:',
+                                re.IGNORECASE)
+    win_prefixes = Counter()
 
     with open(defaults_file, 'r', encoding='utf-8') as f:
         for line in f:
@@ -89,10 +109,23 @@ def detect_prefix_and_type(repo_path):
             if m:
                 stig_prefixes[m.group(1)] += 1
 
+            # Tallied independently, not as an elif: a numeric-family toggle
+            # matches both A and C, and the counts have to be comparable.
+            m = stig_pattern_c.match(stripped)
+            if m:
+                win_prefixes[m.group(1)] += 1
+
     if cis_prefixes and (not stig_prefixes
                          or cis_prefixes.most_common(1)[0][1]
                          >= stig_prefixes.most_common(1)[0][1]):
         return cis_prefixes.most_common(1)[0][0], 'cis'
+
+    # Windows shape only when it strictly out-covers the numeric-family shape,
+    # so a tie (every rhel_NN role) stays with Pattern A.
+    if win_prefixes and (not stig_prefixes
+                         or win_prefixes.most_common(1)[0][1]
+                         > stig_prefixes.most_common(1)[0][1]):
+        return win_prefixes.most_common(1)[0][0], 'stig_win'
 
     if stig_prefixes:
         return stig_prefixes.most_common(1)[0][0], 'stig'
@@ -105,7 +138,11 @@ def find_rule_definitions(repo_path, prefix, benchmark_type):
     defaults_file = _defaults_view(repo_path)
     rules = {}
 
-    if benchmark_type == 'stig':
+    if benchmark_type == 'stig_win':
+        pattern = re.compile(
+            rf'^({re.escape(prefix)}_[a-z0-9]{{2}}_\d{{6}})\s*:',
+            re.IGNORECASE)
+    elif benchmark_type == 'stig':
         pattern = re.compile(
             rf'^({re.escape(prefix)}_\d{{6}})\s*:', re.IGNORECASE)
     else:
@@ -153,8 +190,11 @@ def main():
     parser.add_argument('--prefix',
                         help='Rule toggle prefix (e.g. ubtu20cis, rhel_08). '
                              'Auto-detected if omitted.')
-    parser.add_argument('--type', choices=['cis', 'stig'], default=None,
-                        help='Benchmark type. Auto-detected if omitted.')
+    parser.add_argument('--type', choices=['cis', 'stig', 'stig_win'],
+                        default=None,
+                        help='Benchmark type. Auto-detected if omitted. '
+                             'stig_win is the Windows {prefix}_{family}_{id} '
+                             'toggle shape.')
     args = parser.parse_args()
 
     if not os.path.isdir(args.repo_path):
