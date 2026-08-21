@@ -582,8 +582,15 @@ class RepoScanner:
         self._files_cache: Dict[str, List[str]] = {}
         self._cache_lock = threading.Lock()
         self.status = StatusLine(enabled=progress)
-        self.benchmark_prefix = benchmark_prefix or self._auto_detect_prefix()
-        self.benchmark_type = self._detect_benchmark_type()
+        shared_prefix, shared_type = self._shared_detect()
+        self.benchmark_prefix = (benchmark_prefix or shared_prefix
+                                 or self._auto_detect_prefix())
+        if benchmark_prefix or not shared_type:
+            # An explicit -b, or a shape the shared detector does not know:
+            # derive the type locally for whatever prefix we ended up with.
+            self.benchmark_type = self._detect_benchmark_type()
+        else:
+            self.benchmark_type = shared_type
         # Consulted by the three checks that have no Windows meaning.
         self.is_windows = is_windows_role(directory)
 
@@ -665,6 +672,23 @@ class RepoScanner:
 
     def get_repo_name(self) -> str:
         return os.path.basename(os.path.abspath(self.directory))
+
+    def _shared_detect(self) -> Tuple[str, str]:
+        """Prefix and benchmark type from the shared detector in scripts/.
+
+        ``scripts/check_rule_coverage.py`` owns the authoritative toggle-shape
+        patterns, including the Windows ``{prefix}_{family}_{6digits}`` form.
+        Keeping a second, weaker copy here is what let Rule Coverage silently
+        examine zero toggles on the roles whose prefix has an extra segment.
+        Returns ("", "") when the helper is unavailable or cannot decide, and
+        the caller falls back to the local detection.
+        """
+        try:
+            checker = _load_check_rule_coverage_module()
+            prefix, bm_type = checker.detect_prefix_and_type(self.directory)
+        except (ImportError, OSError, AttributeError):
+            return "", ""
+        return prefix or "", bm_type or ""
 
     def _detect_benchmark_type(self) -> str:
         """Detect whether this is a CIS or STIG benchmark.
@@ -1660,6 +1684,22 @@ class AuditTemplateCheck:
         return CheckResult(self.display_name, status, findings, summary)
 
 
+def _load_check_rule_coverage_module():
+    """Import scripts/check_rule_coverage.py without installing a package."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "scripts",
+        "check_rule_coverage.py",
+    )
+    spec = importlib.util.spec_from_file_location("_check_rule_coverage", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load rule coverage checker from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_check_audit_vars_module():
     """Import scripts/check_audit_vars.py without installing a package."""
     path = os.path.join(
@@ -2000,9 +2040,18 @@ class RuleCoverageCheck:
             return CheckResult(self.display_name, "SKIP",
                                summary="No benchmark prefix detected")
 
-        # Build pattern based on benchmark type (CIS vs STIG)
+        # Build pattern based on benchmark type (CIS vs STIG vs Windows STIG)
         bm_type = self.scanner.benchmark_type
-        if bm_type == "stig":
+        if bm_type == "stig_win":
+            # Windows toggles carry a 2-character family segment between the
+            # prefix and the id, e.g. wn11_cc_000010.
+            rule_pat = re.compile(
+                rf"^({re.escape(prefix)}_[a-z0-9]{{2}}_\d{{6}})\s*:",
+                re.IGNORECASE)
+            ref_pat = re.compile(
+                rf"\b({re.escape(prefix)}_[a-z0-9]{{2}}_\d{{6}})\b",
+                re.IGNORECASE)
+        elif bm_type == "stig":
             rule_pat = re.compile(
                 rf"^({re.escape(prefix)}_\d{{6}})\s*:")
             ref_pat = re.compile(
@@ -2035,6 +2084,17 @@ class RuleCoverageCheck:
                     rule = rm.group(1)
                     if rule not in referenced_rules:
                         referenced_rules[rule] = (rel, num)
+
+        # No silent vacuum. Finding nothing on either side means the toggle
+        # shape was not recognised, not that the role is clean: comparing two
+        # empty sets yields no discrepancy and would otherwise report PASS.
+        # That is how this check went unnoticed while examining zero toggles.
+        if not defined_rules and not referenced_rules:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary=f"No '{prefix}' rule toggles recognised "
+                        f"(benchmark type '{bm_type}') - nothing was compared",
+            )
 
         # Orphaned: defined but never used in tasks
         for rule in sorted(defined_rules):
