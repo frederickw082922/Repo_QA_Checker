@@ -243,6 +243,51 @@ ANSIBLE_BUILTIN_MODULES: Set[str] = {
     "yum", "yum_repository",
 }
 
+# Windows module short names mapped to their collection. No ansible.builtin
+# module starts with "win_", so a bare win_* task key is always non-FQCN - the
+# prefix itself is the signal and this map only supplies the remediation text.
+# Deliberately limited to modules whose collection is unambiguous in the roles
+# themselves rather than a hand-copied catalogue: win_audit_policy_system is
+# omitted because the fleet uses it under both ansible.windows and
+# community.windows, so naming one would be a guess.
+WINDOWS_MODULE_COLLECTIONS: Dict[str, str] = {
+    "setup": "ansible.windows",
+    "win_acl": "ansible.windows",
+    "win_acl_inheritance": "ansible.windows",
+    "win_command": "ansible.windows",
+    "win_feature": "ansible.windows",
+    "win_file": "ansible.windows",
+    "win_find": "ansible.windows",
+    "win_optional_feature": "ansible.windows",
+    "win_reboot": "ansible.windows",
+    "win_reg_stat": "ansible.windows",
+    "win_regedit": "ansible.windows",
+    "win_service": "ansible.windows",
+    "win_service_info": "ansible.windows",
+    "win_shell": "ansible.windows",
+    "win_stat": "ansible.windows",
+    "win_template": "ansible.windows",
+    "win_user": "ansible.windows",
+    "win_user_right": "ansible.windows",
+    "win_disk_facts": "community.windows",
+    "win_security_policy": "community.windows",
+}
+
+
+def _fqcn_suggestion(key: str) -> str:
+    """Remediation text for a bare module name."""
+    if key in ANSIBLE_BUILTIN_MODULES:
+        return f"'ansible.builtin.{key}'"
+    collection = WINDOWS_MODULE_COLLECTIONS.get(key)
+    if collection:
+        return f"'{collection}.{key}'"
+    return "a fully qualified name (ansible.windows.* or community.windows.*)"
+
+
+def _is_bare_module(key: str) -> bool:
+    """True when a task-level key is an unqualified module name."""
+    return key in ANSIBLE_BUILTIN_MODULES or key.startswith("win_")
+
 # Ansible task-level keywords (NOT module names)
 TASK_KEYWORDS: Set[str] = {
     "name", "when", "register", "tags", "vars", "block", "rescue", "always",
@@ -307,6 +352,54 @@ def defaults_files(role_dir: str) -> List[str]:
             if f.endswith((".yml", ".yaml"))
         )
     return []
+
+
+WINDOWS_COLLECTION_PREFIXES = ("ansible.windows.", "community.windows.")
+
+
+def is_windows_role(role_dir: str) -> bool:
+    """True when the role targets Windows.
+
+    Windows roles differ structurally from the Linux Ansible-Lockdown roles:
+    they have no ``vars/audit.yml``, no paired goss audit repo, and use
+    ``ansible.windows`` modules rather than POSIX shell. Checks that are
+    meaningless against that shape consult this so they can skip themselves,
+    instead of every Windows repo having to hand-write ``skip_checks``.
+
+    Primary signal is a declared Windows platform in ``meta/main.yml``, which
+    both the top-level and ``galaxy_info``-nested layouts express. Falls back
+    to Windows module usage so a role with absent or malformed meta still
+    classifies.
+    """
+    meta = os.path.join(role_dir, "meta", "main.yml")
+    if os.path.isfile(meta):
+        # _load_yaml_file keeps PyYAML optional, as the rest of the tool does.
+        data = _load_yaml_file(meta)
+        if isinstance(data, dict):
+            src = data.get("galaxy_info") or data
+            if isinstance(src, dict):
+                for entry in src.get("platforms") or []:
+                    if isinstance(entry, dict) and str(
+                            entry.get("name", "")).strip().lower() == "windows":
+                        return True
+
+    for sub in ("tasks", "handlers"):
+        path = os.path.join(role_dir, sub)
+        if not os.path.isdir(path):
+            continue
+        for root, _, files in os.walk(path):
+            for fname in files:
+                if not fname.endswith((".yml", ".yaml")):
+                    continue
+                try:
+                    with open(os.path.join(root, fname), "r",
+                              encoding="utf-8", errors="replace") as fh:
+                        content = fh.read()
+                except OSError:
+                    continue
+                if any(p in content for p in WINDOWS_COLLECTION_PREFIXES):
+                    return True
+    return False
 
 
 def defaults_label(role_dir: str) -> str:
@@ -491,6 +584,8 @@ class RepoScanner:
         self.status = StatusLine(enabled=progress)
         self.benchmark_prefix = benchmark_prefix or self._auto_detect_prefix()
         self.benchmark_type = self._detect_benchmark_type()
+        # Consulted by the three checks that have no Windows meaning.
+        self.is_windows = is_windows_role(directory)
 
     # -- file cache ---------------------------------------------------------
 
@@ -1536,6 +1631,13 @@ class AuditTemplateCheck:
         return findings
 
     def run(self) -> CheckResult:
+        if self.scanner.is_windows:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary="Windows role: no goss audit bridge template "
+                        "(templates/lockdown_audit.yml.j2) exists",
+            )
+
         findings: List[Finding] = []
         templates_dir = os.path.join(self.scanner.directory, "templates")
         scanned: List[str] = []
@@ -1582,6 +1684,14 @@ class AuditVarsCheck:
         self.scanner = scanner
 
     def run(self) -> CheckResult:
+        if self.scanner.is_windows:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary="Windows role: the audit_* variable family belongs to "
+                        "roles paired with a goss audit repo; there is no "
+                        "working Windows audit",
+            )
+
         try:
             checker = _load_check_audit_vars_module()
         except ImportError as exc:
@@ -1637,6 +1747,14 @@ class ShellPipefailCheck:
         self.scanner = scanner
 
     def run(self) -> CheckResult:
+        if self.scanner.is_windows:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary="Windows role: POSIX 'set -o pipefail' and "
+                        "args.executable have no meaning for "
+                        "ansible.windows.win_shell",
+            )
+
         try:
             checker = _load_check_shell_pipefail_module()
             scan_mod = checker._load_scan_module()
@@ -1708,11 +1826,11 @@ class FQCNCheck:
                     if um:
                         task_indent = len(um.group(1)) + 2
                         key = um.group(2)
-                        if key in ANSIBLE_BUILTIN_MODULES and key not in TASK_KEYWORDS:
+                        if _is_bare_module(key) and key not in TASK_KEYWORDS:
                             findings.append(Finding(
                                 rel, num,
                                 f"Non-FQCN module: '{key}' -> "
-                                f"'ansible.builtin.{key}'",
+                                f"{_fqcn_suggestion(key)}",
                                 "warning", "fqcn"))
                         continue
 
@@ -1728,11 +1846,11 @@ class FQCNCheck:
                     km = re.match(r"^(\s+)([a-z][a-z0-9_]*):\s", raw)
                     if km and len(km.group(1)) == task_indent:
                         key = km.group(2)
-                        if key in ANSIBLE_BUILTIN_MODULES and key not in TASK_KEYWORDS:
+                        if _is_bare_module(key) and key not in TASK_KEYWORDS:
                             findings.append(Finding(
                                 rel, num,
                                 f"Non-FQCN module: '{key}' -> "
-                                f"'ansible.builtin.{key}'",
+                                f"{_fqcn_suggestion(key)}",
                                 "warning", "fqcn"))
         status = "PASS" if not findings else "WARN"
         return CheckResult(self.display_name, status, findings,
