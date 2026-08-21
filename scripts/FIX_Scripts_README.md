@@ -9,10 +9,10 @@ Standalone Python scripts for detecting and auto-fixing common issues in [Ansibl
 | Script | What It Fixes / Checks | Auto-Fix |
 |--------|----------------------|----------|
 | [`run_all_checks.sh`](#run_all_checkssh) | **Runs ALL scripts below in one pass** | `--fix` `--checks` `--dry-run` |
-| [`fix_fqcn.py`](#fix_fqcnpy) | Bare module names → `ansible.builtin.*` | `--fix` |
-| [`check_file_modes.py`](#check_file_modespy) | Octal, absolute (`=`), mixed mode notation → relative (`-`) | `--fix` |
-| [`fix_file_modes.py`](#fix_file_modespy) | Unquoted file modes (`0644` → `'0644'`) | `--fix` |
-| [`fix_when_inline.py`](#fix_when_inlinepy) | Single-item `when:`/`tags:` lists → inline | `--fix` |
+| [`fix_fqcn.py`](#fix_fqcnpy) | Bare module names -> `ansible.builtin.*` | `--fix` |
+| [`check_file_modes.py`](#check_file_modespy) | Octal, absolute (`=`), mixed mode notation -> relative (`-`) | `--fix` |
+| [`fix_file_modes.py`](#fix_file_modespy) | Unquoted file modes (`0644` -> `'0644'`) | `--fix` |
+| [`fix_when_inline.py`](#fix_when_inlinepy) | Single-item `when:`/`tags:` lists -> inline | `--fix` |
 | [`fix_changed_when.py`](#fix_changed_whenpy) | Missing `changed_when` on shell/command tasks | `--fix` |
 | [`fix_handler_refs.py`](#fix_handler_refspy) | Missing, unused, duplicate handlers; FQCN | `--fix-case` `--fix-fqcn` |
 | [`fix_no_log.py`](#fix_no_logpy) | Missing `no_log: true` on sensitive tasks | `--fix` |
@@ -21,7 +21,7 @@ Standalone Python scripts for detecting and auto-fixing common issues in [Ansibl
 | [`fix_company_naming.py`](#fix_company_namingpy) | Outdated company/org names | `--fix --new-name` |
 | [`check_rule_coverage.py`](#check_rule_coveragepy) | Rule toggle ↔ task coverage gaps | Report only |
 | [`check_var_naming.py`](#check_var_namingpy) | Register prefixes, duplicates, fwd/reverse | Report only |
-| [`fix_ignore_errors.py`](#fix_ignore_errorspy) | `ignore_errors: true` → `failed_when: false` | `--fix` |
+| [`fix_ignore_errors.py`](#fix_ignore_errorspy) | `ignore_errors: true` -> `failed_when: false` | `--fix` |
 | [`fix_loop_control.py`](#fix_loop_controlpy) | Loops missing `loop_control.label` | `--fix` |
 | [`fix_shell_pipefail.py`](#fix_shell_pipefailpy) | Missing `set -o pipefail` and `args: executable:` on `ansible.builtin.shell` tasks | `--dry-run` to preview |
 | [`check_shell_pipefail.py`](#check_shell_pipefailpy) | Same layout rules as `fix_shell_pipefail.py` (read-only report) | Report only |
@@ -30,14 +30,14 @@ Standalone Python scripts for detecting and auto-fixing common issues in [Ansibl
 | [`check_template_headers.py`](#check_template_headerspy) | Missing `{{ file_managed_by_ansible }}` header | `--fix` |
 | [`check_register_order.py`](#check_register_orderpy) | `register:` before `changed_when`/`failed_when`/`check_mode` | `--fix` |
 | [`fix_warn_count.py`](#fix_warn_countpy) | Manual remediation tasks missing `warning_facts.yml` Warn Count | `--fix` |
-| [`dependency_graph.py`](#dependency_graphpy) | Variable dependency graph (register/set_fact → all references) | Report only |
+| [`dependency_graph.py`](#dependency_graphpy) | Variable dependency graph (register/set_fact -> all references) | Report only |
 
 ---
 
 ## Requirements
 
-- **Python 3.8+** (standard library only — zero external dependencies)
-- An Ansible Lockdown role directory with `defaults/main.yml` and `tasks/`
+- **Python 3.8+** (standard library only - zero external dependencies)
+- An Ansible Lockdown role directory with role defaults (`defaults/main.yml` or a `defaults/main/` directory) and `tasks/`
 
 ---
 
@@ -46,7 +46,7 @@ Standalone Python scripts for detecting and auto-fixing common issues in [Ansibl
 All scripts follow the same patterns:
 
 ```bash
-# Dry run (default) — report issues without changing files
+# Dry run (default) - report issues without changing files
 python fix_fqcn.py /path/to/role
 
 # Apply fixes
@@ -56,14 +56,14 @@ python fix_fqcn.py /path/to/role --fix
 cd /path/to/role && git diff
 ```
 
-- **Dry run by default** — no files are modified unless `--fix` is passed
+- **Dry run by default** - no files are modified unless `--fix` is passed
 - **Exit code 0** = clean, **exit code 1** = issues found (or errors)
-- **Auto-detection** — benchmark type (CIS/STIG) and variable prefix are detected automatically from `defaults/main.yml`
-- **`.qa_config.yml`** — some scripts load per-repo configuration when present
+- **Auto-detection** - benchmark type (CIS/STIG) and variable prefix are detected automatically from the role defaults
+- **`.qa_config.yml`** - some scripts load per-repo configuration when present
 
 ### CIS vs STIG Detection
 
-Scripts that need the benchmark prefix auto-detect it from `defaults/main.yml`:
+Scripts that need the benchmark prefix auto-detect it from the role defaults (`defaults/main.yml`, or every file in a `defaults/main/` directory):
 
 | Type | Config Prefix | Rule Toggle Pattern | Example |
 |------|--------------|-------------------|---------|
@@ -83,7 +83,7 @@ All scripts detect both patterns automatically.
 
 ### `run_all_checks.sh`
 
-Bash runner that executes all check and fix scripts in one pass against any Ansible Lockdown role. Auto-detects benchmark type (CIS or STIG) from `defaults/main.yml`.
+Bash runner that executes all check and fix scripts in one pass against any Ansible Lockdown role. Auto-detects benchmark type (CIS or STIG) from the role defaults.
 
 ```bash
 ./run_all_checks.sh /path/to/role              # Full scan (checks + fix dry-run)
@@ -100,7 +100,7 @@ Bash runner that executes all check and fix scripts in one pass against any Ansi
 ```
 
 **Features:**
-- Validates repo structure before running (checks for `defaults/main.yml` and `tasks/`)
+- Validates repo structure before running (checks for the role defaults and `tasks/`)
 - Runs 7 check scripts + 13 fix scripts (dry-run by default)
 - Per-script pass/warn tracking with summary
 - Timing and meaningful exit codes: `0` = clean, `1` = warnings found, `2` = bad args or missing repo structure
@@ -108,7 +108,7 @@ Bash runner that executes all check and fix scripts in one pass against any Ansi
 **Sample output:**
 ```
 ============================================================
-  Ansible Lockdown QA — Full Scan
+  Ansible Lockdown QA - Full Scan
   Role: UBUNTU20-CIS
   Path: /Users/user/repos/UBUNTU20-CIS
   Mode: full scan (report only)
@@ -118,7 +118,7 @@ Bash runner that executes all check and fix scripts in one pass against any Ansi
   ...individual script results...
 
 ============================================================
-  Summary — UBUNTU20-CIS
+  Summary - UBUNTU20-CIS
 ============================================================
   Scripts run: 20
   Clean:       14
@@ -372,7 +372,7 @@ python fix_ignore_errors.py /path/to/role --fix     # Apply fixes
 
 ### `fix_loop_control.py`
 
-Finds loop tasks (`loop:`, `with_items:`, `with_dict:`, etc.) missing `loop_control.label`. Without a label, Ansible dumps the entire loop item to stdout on each iteration — potentially leaking passwords, hashes, and other sensitive data.
+Finds loop tasks (`loop:`, `with_items:`, `with_dict:`, etc.) missing `loop_control.label`. Without a label, Ansible dumps the entire loop item to stdout on each iteration - potentially leaking passwords, hashes, and other sensitive data.
 
 ```bash
 python fix_loop_control.py /path/to/role                       # Scan only
@@ -469,7 +469,7 @@ python check_shell_pipefail.py --all /path/to/STIG --compact
 - `set -o pipefail` not first content line (warning)
 - `args.executable` present but not referencing the role's `*_shell_executable` variable
 
-Auto-detects `<prefix>_shell_executable` from `vars/main.yml` or `defaults/main.yml`. Exit code `1` when any issue is found.
+Auto-detects `<prefix>_shell_executable` from `vars/main.yml` or the role defaults. Exit code `1` when any issue is found.
 
 **Exit codes:** `0` = nothing to fix, `1` = fixes applied (or dry-run with findings), `2` = error.
 
@@ -524,7 +524,7 @@ Total issues:     3
 
 ### `check_rule_coverage.py`
 
-Cross-references rule toggle variables in `defaults/main.yml` against their usage in `tasks/`, `templates/`, and `handlers/` to find orphaned toggles and missing implementations.
+Cross-references rule toggle variables in the role defaults against their usage in `tasks/`, `templates/`, and `handlers/` to find orphaned toggles and missing implementations.
 
 ```bash
 python check_rule_coverage.py /path/to/role                  # Auto-detect
@@ -565,7 +565,7 @@ python check_var_naming.py /path/to/role --prefix rhel8stig --type stig
 |-------|--------------|
 | Register prefix | Variables not using `discovered_`, `prelim_`, `pre_audit_`, `post_audit_`, or `set_` |
 | Duplicate registers | Same register name used in multiple tasks |
-| Duplicate defaults | Same top-level key defined twice in `defaults/main.yml` |
+| Duplicate defaults | Same top-level key defined twice in the role defaults (including across two files in a `defaults/main/` directory) |
 | Forward/reverse | Defined but unused vars; referenced but undefined vars |
 
 **STIG dual-prefix support:** Correctly tracks both config prefix (`rhel8stig_*`) and rule prefix (`rhel_08_*`) for STIG repos.
@@ -732,14 +732,14 @@ python dependency_graph.py /path/to/role --format dot              # Graphviz DO
 
 ## Recommended Workflow
 
-### Quick Scan (no changes) — One Command
+### Quick Scan (no changes) - One Command
 
 ```bash
 # Run ALL checks and fixes (dry-run) in one pass
 ./scripts/run_all_checks.sh /path/to/role
 ```
 
-### Auto-Fix — One Command
+### Auto-Fix - One Command
 
 ```bash
 # Apply all fixes at once
@@ -772,7 +772,7 @@ python scripts/fix_spelling.py /path/to/role --fix      # Just spelling
 ### CI Integration
 
 ```bash
-# Exit code 1 if any issues found — use in CI pipelines
+# Exit code 1 if any issues found - use in CI pipelines
 ./scripts/run_all_checks.sh /path/to/role --checks
 # Or individual checks:
 python scripts/check_rule_coverage.py /path/to/role || exit 1
@@ -799,7 +799,7 @@ All scripts are validated against multiple Ansible Lockdown repos:
 
 | Tool | Location | Description |
 |------|----------|-------------|
-| `Ansible_Lockdown_QA_Repo_Check.py` | `../` | Main QA tool — runs all checks with HTML/MD/JSON reports |
+| `Ansible_Lockdown_QA_Repo_Check.py` | `../` | Main QA tool - runs all checks with HTML/MD/JSON reports |
 | `cross_repo_validator.py` | `./` | Validates remediation + audit repo pairs (14 checks) |
 | `audit_compare.py` | `./` | Compares pre/post audit scan results |
 
