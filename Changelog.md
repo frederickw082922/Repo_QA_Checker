@@ -51,6 +51,21 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 - **The cross-repo validator aborted its own checks on a defaults directory.** Ten of its helpers open a
   single defaults path; for the directory layout it now builds one concatenated view so they run instead
   of silently reading nothing. Line numbers in those findings refer to the concatenation.
+- **The Rule Coverage check in the main script examined zero toggles on 7 of 24 roles and reported
+  PASS.** The check exists twice: the standalone `scripts/check_rule_coverage.py` and an inline
+  reimplementation in the main script, which is the one CI runs. Three defects compounded in the
+  inline copy. `_auto_detect_prefix` votes for the shortest candidate, so `rhel_09_211010` yielded
+  `rhel` rather than `rhel_09`; `_detect_benchmark_type` then found neither a CIS nor a STIG pattern
+  for that prefix and returned `cis` anyway, because its final comparison is `cis_count >=
+  stig_count` and both were zero; the check then built a pattern matching nothing and found no
+  discrepancy between two empty sets. Affected `Private-RHEL9-STIG` (446 toggles unexamined) and all
+  six Windows STIG roles (257, 261, 282, 279, 292 and 273). The main script now uses the shared
+  detector in `scripts/`, falling back to the local detection for any shape that detector does not
+  know, so no role loses its existing behaviour.
+- **A Rule Coverage run that recognises no toggles now reports SKIP with the reason, not PASS.**
+  Collecting zero rules on both sides means the toggle shape was not recognised, not that the role is
+  clean. Reporting PASS is what let the defect above go unnoticed, and the guard makes any future
+  recurrence of that class visible.
 - **Rule Coverage checked roughly a sixth of every Windows role and reported PASS.** The STIG prefix
   pattern required a numeric family segment (`rhel_09_211010`), but Windows toggles carry a mostly
   alphabetic family (`wn11_cc_000010`). Detection latched onto the one numeric family, `wn11_00`, and
