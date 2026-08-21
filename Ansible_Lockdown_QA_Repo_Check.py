@@ -2566,8 +2566,12 @@ class BaselineManager:
                 for r in results for f in r.findings
             ],
         }
+        # Trailing newline is required, not cosmetic. Consumers of this file run the
+        # pre-commit end-of-file-fixer hook, which fails on a file ending in "}" with no
+        # newline - so a freshly saved baseline would fail the very repo it was generated
+        # for. json.dump omits it; json.dumps + "\n" is the form used elsewhere here.
         with open(filepath, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
+            fh.write(json.dumps(data, indent=2) + "\n")
 
     @staticmethod
     def load(filepath: str) -> Dict[str, Any]:
