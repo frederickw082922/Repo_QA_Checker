@@ -19,6 +19,17 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 - **Duplicate-key detection now reports a key defined in two different files** inside `defaults/main/`.
   That is a failure mode the directory layout creates and the single-file layout could not have: Ansible
   loads the files alphabetically, so the later one silently wins.
+- **Windows roles are now recognised, and the checks with no Windows meaning skip themselves.** A role
+  declaring a Windows platform in `meta/main.yml` is detected structurally, with Windows module usage as
+  a fallback signal. `Audit Template`, `Audit Variable Placement` and `Shell Pipefail Layout` return SKIP
+  with the reason named, rather than demanding a goss audit stack and a POSIX shell executable that no
+  Windows role can have. Previously a Windows repo only passed if someone hand-wrote `skip_checks` in
+  `.qa_config.yml`; one that had not emitted 29 audit-variable warnings plus a shell-pipefail warning,
+  failing `--strict` for reasons no change to the role could resolve.
+- **The FQCN check now knows the Windows collections.** Detection keyed on a set of `ansible.builtin`
+  short names, so a bare `win_regedit:` was never flagged. Any unqualified `win_*` module is now
+  reported, with the correct collection named for modules whose collection is unambiguous across the
+  roles and a generic hint otherwise.
 
 ### Changed
 
@@ -40,6 +51,14 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 - **The cross-repo validator aborted its own checks on a defaults directory.** Ten of its helpers open a
   single defaults path; for the directory layout it now builds one concatenated view so they run instead
   of silently reading nothing. Line numbers in those findings refer to the concatenation.
+- **Rule Coverage checked roughly a sixth of every Windows role and reported PASS.** The STIG prefix
+  pattern required a numeric family segment (`rhel_09_211010`), but Windows toggles carry a mostly
+  alphabetic family (`wn11_cc_000010`). Detection latched onto the one numeric family, `wn11_00`, and
+  scoped the whole run to it: 43 of 257 toggles on Windows 11, and 44/261, 46/282, 46/279, 49/292 and
+  47/273 across the rest, each printing "All rules have corresponding tasks". A third pattern now
+  recognises the Windows shape and reports the full toggle set. It applies only where it covers strictly
+  more toggles than the numeric-family pattern, so the Linux `rhel_NN` roles - which both patterns match
+  equally - keep their existing prefix. Verified unchanged across 9 Linux roles, 135 check rows.
 
 ## 2.8.3 - 2026-08-14
 
