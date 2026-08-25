@@ -154,21 +154,48 @@ def _find_roles(root: str) -> list[str]:
             d for d in dirnames
             if d not in {".git", "__pycache__", "node_modules", ".github"}
         ]
-        if "main.yml" in filenames and os.path.basename(dirpath) == "defaults":
+        is_defaults = os.path.basename(dirpath) == "defaults"
+        has_defaults = "main.yml" in filenames or "main" in dirnames
+        if is_defaults and has_defaults:
             role = os.path.dirname(dirpath)
             if os.path.isdir(os.path.join(role, "tasks")):
                 roles.append(role)
     return sorted(roles)
 
 
+def _defaults_files(role_path: str) -> list[str]:
+    """defaults/main.yml, or every YAML file in a defaults/main/ directory.
+
+    Ansible accepts either shape. Sorted so the order matches Ansible's own
+    alphabetical load order.
+    """
+    base = os.path.join(role_path, "defaults")
+    single = os.path.join(base, "main.yml")
+    if os.path.isfile(single):
+        return [single]
+    as_dir = os.path.join(base, "main")
+    if os.path.isdir(as_dir):
+        return sorted(
+            os.path.join(as_dir, f)
+            for f in os.listdir(as_dir)
+            if f.endswith((".yml", ".yaml"))
+        )
+    return []
+
+
 def check_role(role_path: str) -> RoleReport:
     role_path = os.path.abspath(role_path)
     report = RoleReport(role_path=role_path)
 
-    defaults_path = os.path.join(role_path, "defaults", "main.yml")
+    defaults_paths = _defaults_files(role_path)
     audit_vars_path = os.path.join(role_path, "vars", "audit.yml")
-
-    defaults_lines = _read_lines(defaults_path)
+    # A defaults/main/ directory contributes several files; concatenate so the
+    # top-level key scan sees every declaration.
+    defaults_lines = None
+    for _p in defaults_paths:
+        _lines = _read_lines(_p)
+        if _lines is not None:
+            defaults_lines = (defaults_lines or []) + _lines
     if defaults_lines is None:
         report.issues.append(Issue(
             check="structure",
@@ -215,8 +242,15 @@ def check_role(role_path: str) -> RoleReport:
             line=audit_keys[name],
         ))
 
-    # Check B — internal constants should not be in defaults/main.yml
-    for name in sorted(VARS_AUDIT_VARS & set(defaults_keys)):
+    # Check B — internal constants should not be in defaults, but only under the
+    # two-tier layout. A role that has consolidated every audit variable into
+    # defaults and dropped vars/audit.yml is single-tier by design, and flagging all
+    # 21 constants there would be noise, not a finding. Detect the layout rather
+    # than assuming one: two-tier means vars/audit.yml exists and carries the
+    # constants.
+    single_tier = audit_lines is None and bool(VARS_AUDIT_VARS & set(defaults_keys))
+    for name in ([] if single_tier
+                 else sorted(VARS_AUDIT_VARS & set(defaults_keys))):
         report.issues.append(Issue(
             check="B",
             severity="warning",

@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import os
+import tempfile
 import re
 import sys
 from collections import Counter
@@ -38,6 +39,33 @@ ANSIBLE_BUILTINS = {
     "groups", "hostvars", "play_hosts", "role_path", "playbook_dir",
     "omit", "true", "false", "none", "ansible_local",
 }
+
+
+def _defaults_view(role_path):
+    """Return one readable path covering the role's defaults.
+
+    Ansible accepts either defaults/main.yml or a defaults/main/ directory. For the
+    directory shape, concatenate the files into a temporary view so callers that open
+    a single path keep working. Line numbers in findings then refer to the
+    concatenation rather than the individual file, which is the trade for having these
+    checks run at all instead of silently reading nothing.
+    """
+    single = os.path.join(role_path, "defaults", "main.yml")
+    if os.path.isfile(single):
+        return single
+    as_dir = os.path.join(role_path, "defaults", "main")
+    if not os.path.isdir(as_dir):
+        return single  # caller's isfile() guard reports it missing
+    parts = []
+    for name in sorted(os.listdir(as_dir)):
+        if name.endswith((".yml", ".yaml")):
+            with open(os.path.join(as_dir, name), encoding="utf-8") as fh:
+                parts.append(fh.read())
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False,
+                                      encoding="utf-8")
+    tmp.write("\n".join(parts))
+    tmp.close()
+    return tmp.name
 
 
 def extract_bridge_template_output_keys(repo_path):
@@ -135,7 +163,7 @@ def detect_prefixes(repo_path):
         Config: rhel8stig_cat1, rhel8stig_gui, etc.
         Rules:  rhel_08_010000, rhel_08_020235, etc.
     """
-    defaults = os.path.join(repo_path, "defaults", "main.yml")
+    defaults = _defaults_view(repo_path)
     if not os.path.isfile(defaults):
         return None, None, None
 
@@ -265,7 +293,7 @@ def check_duplicate_registers(repo_path):
 def check_duplicate_defaults(repo_path):
     """Check for duplicate top-level keys in defaults/main.yml."""
     issues = []
-    defaults = os.path.join(repo_path, "defaults", "main.yml")
+    defaults = _defaults_view(repo_path)
     if not os.path.isfile(defaults):
         return issues
 
@@ -345,7 +373,7 @@ def check_forward_reverse(repo_path, config_prefix, rule_prefix, benchmark_type)
 
     # Collect defined variables
     defined = {}
-    defaults = os.path.join(repo_path, "defaults", "main.yml")
+    defaults = _defaults_view(repo_path)
     if os.path.isfile(defaults):
         with open(defaults, "r", encoding="utf-8") as f:
             for num, line in enumerate(f, 1):

@@ -4,6 +4,77 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## 2.8.4 - 2026-08-21
+
+### Added
+
+- **A role's defaults may now be a `defaults/main/` directory, not only `defaults/main.yml`.** Ansible
+  has always accepted either shape, loading every YAML file in the directory, but this tool looked for
+  the single file and aborted before running a check when it was absent:
+  `Error: 'defaults/main.yml' not found. Are you in an Ansible role directory?` A shared resolver now
+  returns the file, or every YAML file in the directory sorted to match Ansible's alphabetical load
+  order. Routed through all 10 sites in the main script and through five helper checks that carried the
+  same assumption independently: `check_audit_vars.py`, `check_shell_pipefail.py`,
+  `check_rule_coverage.py`, `check_tags_completeness.py` and `check_var_naming.py`.
+- **Duplicate-key detection now reports a key defined in two different files** inside `defaults/main/`.
+  That is a failure mode the directory layout creates and the single-file layout could not have: Ansible
+  loads the files alphabetically, so the later one silently wins.
+- **Windows roles are now recognised, and the checks with no Windows meaning skip themselves.** A role
+  declaring a Windows platform in `meta/main.yml` is detected structurally, with Windows module usage as
+  a fallback signal. `Audit Template`, `Audit Variable Placement` and `Shell Pipefail Layout` return SKIP
+  with the reason named, rather than demanding a goss audit stack and a POSIX shell executable that no
+  Windows role can have. Previously a Windows repo only passed if someone hand-wrote `skip_checks` in
+  `.qa_config.yml`; one that had not emitted 29 audit-variable warnings plus a shell-pipefail warning,
+  failing `--strict` for reasons no change to the role could resolve.
+- **The FQCN check now knows the Windows collections.** Detection keyed on a set of `ansible.builtin`
+  short names, so a bare `win_regedit:` was never flagged. Any unqualified `win_*` module is now
+  reported, with the correct collection named for modules whose collection is unambiguous across the
+  roles and a generic hint otherwise.
+
+### Changed
+
+- **CHECK B in the audit-variable check is now layout-aware.** It forbids role-internal audit constants
+  in `defaults/`, which is correct for the two-tier layout where `vars/audit.yml` holds them. A role that
+  has consolidated every audit variable into `defaults/` and dropped `vars/audit.yml` is single-tier by
+  design, and flagging all 21 constants there is noise rather than a finding. The layout is now detected
+  rather than assumed, so both shapes validate correctly and neither needs its findings baselined away.
+
+### Fixed
+
+- **The cross-repo validator extracted zero task-side rules for every `Cat<N>` role.** Subdirectory
+  discovery was gated on `entry.startswith("cat_")` at five separate sites, which matches `cat_1` but
+  not `Cat1` or `Cat_1`. That silently emptied the task side for nine STIG repos, leaving
+  `Rule Key Consistency`, `Category Alignment` and `File Path Alignment` reporting PASS while comparing
+  nothing. The companion line derived the CAT number by splitting on `_`, yielding 0 for every `Cat<N>`
+  directory. Regression checked across layouts: a `cat_`/`section_` CIS role stays at 306 rules and an
+  `cat_` STIG role at 187, while `Cat` and `Cat_` roles go from 0 to 188 and 355.
+- **The cross-repo validator aborted its own checks on a defaults directory.** Ten of its helpers open a
+  single defaults path; for the directory layout it now builds one concatenated view so they run instead
+  of silently reading nothing. Line numbers in those findings refer to the concatenation.
+- **The Rule Coverage check in the main script examined zero toggles on 7 of 24 roles and reported
+  PASS.** The check exists twice: the standalone `scripts/check_rule_coverage.py` and an inline
+  reimplementation in the main script, which is the one CI runs. Three defects compounded in the
+  inline copy. `_auto_detect_prefix` votes for the shortest candidate, so `rhel_09_211010` yielded
+  `rhel` rather than `rhel_09`; `_detect_benchmark_type` then found neither a CIS nor a STIG pattern
+  for that prefix and returned `cis` anyway, because its final comparison is `cis_count >=
+  stig_count` and both were zero; the check then built a pattern matching nothing and found no
+  discrepancy between two empty sets. Affected `Private-RHEL9-STIG` (446 toggles unexamined) and all
+  six Windows STIG roles (257, 261, 282, 279, 292 and 273). The main script now uses the shared
+  detector in `scripts/`, falling back to the local detection for any shape that detector does not
+  know, so no role loses its existing behaviour.
+- **A Rule Coverage run that recognises no toggles now reports SKIP with the reason, not PASS.**
+  Collecting zero rules on both sides means the toggle shape was not recognised, not that the role is
+  clean. Reporting PASS is what let the defect above go unnoticed, and the guard makes any future
+  recurrence of that class visible.
+- **Rule Coverage checked roughly a sixth of every Windows role and reported PASS.** The STIG prefix
+  pattern required a numeric family segment (`rhel_09_211010`), but Windows toggles carry a mostly
+  alphabetic family (`wn11_cc_000010`). Detection latched onto the one numeric family, `wn11_00`, and
+  scoped the whole run to it: 43 of 257 toggles on Windows 11, and 44/261, 46/282, 46/279, 49/292 and
+  47/273 across the rest, each printing "All rules have corresponding tasks". A third pattern now
+  recognises the Windows shape and reports the full toggle set. It applies only where it covers strictly
+  more toggles than the numeric-family pattern, so the Linux `rhel_NN` roles - which both patterns match
+  equally - keep their existing prefix. Verified unchanged across 9 Linux roles, 135 check rows.
+
 ## 2.8.3 - 2026-08-14
 
 ### Fixed

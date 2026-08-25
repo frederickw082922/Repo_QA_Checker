@@ -5,31 +5,73 @@ Works with any ansible-lockdown benchmark role (CIS, STIG, any OS).
 Auto-detects the benchmark prefix and type from defaults/main.yml.
 
 Supported toggle formats:
-- CIS:  {prefix}_rule_{section}  (e.g. ubtu20cis_rule_1_1_1_1)
-- STIG: {prefix}_{6digits}       (e.g. rhel_08_010000, az2023stig_001010)
+- CIS:      {prefix}_rule_{section}       (e.g. ubtu20cis_rule_1_1_1_1)
+- STIG:     {prefix}_{6digits}            (e.g. rhel_09_211010, az2023stig_001010)
+- STIG/Win: {prefix}_{family}_{6digits}   (e.g. wn11_cc_000010, wn11_00_000030)
 
 The prefix is auto-detected by finding the most common pattern among
 top-level variables in defaults/main.yml.
 
 Usage:
-    python check_rule_coverage.py <repo_path> [--prefix PREFIX] [--type cis|stig]
+    python check_rule_coverage.py <repo_path> [--prefix PREFIX]
+        [--type cis|stig|stig_win]
 """
 
 import argparse
 import os
+import tempfile
 import re
 import sys
 from collections import Counter
+
+
+def _defaults_view(role_path):
+    """Return one readable path covering the role's defaults.
+
+    Ansible accepts either defaults/main.yml or a defaults/main/ directory. For the
+    directory shape, concatenate the files into a temporary view so callers that open
+    a single path keep working. Line numbers in findings then refer to the
+    concatenation rather than the individual file, which is the trade for having these
+    checks run at all instead of silently reading nothing.
+    """
+    single = os.path.join(role_path, "defaults", "main.yml")
+    if os.path.isfile(single):
+        return single
+    as_dir = os.path.join(role_path, "defaults", "main")
+    if not os.path.isdir(as_dir):
+        return single  # caller's isfile() guard reports it missing
+    parts = []
+    for name in sorted(os.listdir(as_dir)):
+        if name.endswith((".yml", ".yaml")):
+            with open(os.path.join(as_dir, name), encoding="utf-8") as fh:
+                parts.append(fh.read())
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False,
+                                      encoding="utf-8")
+    tmp.write("\n".join(parts))
+    tmp.close()
+    return tmp.name
 
 
 def detect_prefix_and_type(repo_path):
     """Auto-detect the benchmark prefix and type from defaults/main.yml.
 
     Returns (prefix, benchmark_type) where:
-    - CIS:  prefix like 'ubtu20cis', type='cis'
-    - STIG: prefix like 'rhel_08', type='stig'
+    - CIS:      prefix like 'ubtu20cis', type='cis'
+    - STIG:     prefix like 'rhel_09', type='stig'
+    - STIG/Win: prefix like 'wn11', type='stig_win'
+
+    The Windows STIG roles name toggles {prefix}_{family}_{6digits} where the
+    family segment is usually alphabetic (wn11_cc_000010). Pattern A below only
+    matches a numeric family, so on a Windows role it latches onto the single
+    numeric family (wn11_00) and silently scopes the run to that slice. Pattern
+    C recognises the full shape.
+
+    Pattern C is applied only when it covers strictly more toggles than Pattern
+    A. That matters because both match the Linux 'rhel_09_211010' shape - A
+    yields 'rhel_09' and C would yield 'rhel' - so a tie must stay with A or
+    every rhel_NN role would silently change prefix.
     """
-    defaults_file = os.path.join(repo_path, 'defaults', 'main.yml')
+    defaults_file = _defaults_view(repo_path)
     if not os.path.isfile(defaults_file):
         return None, None
 
@@ -43,6 +85,12 @@ def detect_prefix_and_type(repo_path):
     # Pattern B: prefix ending in "stig" followed by _6digits (e.g. az2023stig_001010)
     stig_pattern_b = re.compile(r'^(\w*stig)_(\d{6})\s*:', re.IGNORECASE)
     stig_prefixes = Counter()
+
+    # Pattern C: Windows shape - prefix, 2-char alphanumeric family, 6 digits
+    # (e.g. wn11_cc_000010, wn11_00_000030)
+    stig_pattern_c = re.compile(r'^(\w+?)_([a-z0-9]{2})_(\d{6})\s*:',
+                                re.IGNORECASE)
+    win_prefixes = Counter()
 
     with open(defaults_file, 'r', encoding='utf-8') as f:
         for line in f:
@@ -61,10 +109,23 @@ def detect_prefix_and_type(repo_path):
             if m:
                 stig_prefixes[m.group(1)] += 1
 
+            # Tallied independently, not as an elif: a numeric-family toggle
+            # matches both A and C, and the counts have to be comparable.
+            m = stig_pattern_c.match(stripped)
+            if m:
+                win_prefixes[m.group(1)] += 1
+
     if cis_prefixes and (not stig_prefixes
                          or cis_prefixes.most_common(1)[0][1]
                          >= stig_prefixes.most_common(1)[0][1]):
         return cis_prefixes.most_common(1)[0][0], 'cis'
+
+    # Windows shape only when it strictly out-covers the numeric-family shape,
+    # so a tie (every rhel_NN role) stays with Pattern A.
+    if win_prefixes and (not stig_prefixes
+                         or win_prefixes.most_common(1)[0][1]
+                         > stig_prefixes.most_common(1)[0][1]):
+        return win_prefixes.most_common(1)[0][0], 'stig_win'
 
     if stig_prefixes:
         return stig_prefixes.most_common(1)[0][0], 'stig'
@@ -74,10 +135,14 @@ def detect_prefix_and_type(repo_path):
 
 def find_rule_definitions(repo_path, prefix, benchmark_type):
     """Find all rule toggle variables in defaults/main.yml."""
-    defaults_file = os.path.join(repo_path, 'defaults', 'main.yml')
+    defaults_file = _defaults_view(repo_path)
     rules = {}
 
-    if benchmark_type == 'stig':
+    if benchmark_type == 'stig_win':
+        pattern = re.compile(
+            rf'^({re.escape(prefix)}_[a-z0-9]{{2}}_\d{{6}})\s*:',
+            re.IGNORECASE)
+    elif benchmark_type == 'stig':
         pattern = re.compile(
             rf'^({re.escape(prefix)}_\d{{6}})\s*:', re.IGNORECASE)
     else:
@@ -125,8 +190,11 @@ def main():
     parser.add_argument('--prefix',
                         help='Rule toggle prefix (e.g. ubtu20cis, rhel_08). '
                              'Auto-detected if omitted.')
-    parser.add_argument('--type', choices=['cis', 'stig'], default=None,
-                        help='Benchmark type. Auto-detected if omitted.')
+    parser.add_argument('--type', choices=['cis', 'stig', 'stig_win'],
+                        default=None,
+                        help='Benchmark type. Auto-detected if omitted. '
+                             'stig_win is the Windows {prefix}_{family}_{id} '
+                             'toggle shape.')
     args = parser.parse_args()
 
     if not os.path.isdir(args.repo_path):

@@ -40,6 +40,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, asdict
@@ -50,7 +51,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.8.1"
+VERSION = "2.8.4"
 
 BENCHMARK_STIG = "stig"
 BENCHMARK_CIS = "cis"
@@ -528,14 +529,19 @@ def extract_task_data(tasks_dir: str, benchmark_type: str,
     if os.path.isdir(tasks_dir):
         for entry in sorted(os.listdir(tasks_dir)):
             full = os.path.join(tasks_dir, entry)
-            if os.path.isdir(full) and (entry.startswith("cat_") or
-                                         entry.startswith("section_")):
+            # Accept Cat1, Cat_1, cat_1, section_3 - STIG roles vary in case and
+            # separator, and a startswith("cat_") test silently matched none of the
+            # Cat<N> roles, leaving task_map empty and three checks vacuous.
+            if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
                 task_subdirs.append(entry)
 
     for subdir_name in task_subdirs:
         cat_path = os.path.join(tasks_dir, subdir_name)
         # Extract numeric portion: cat_1 -> 1, section_3 -> 3
-        cat_num = int(subdir_name.split("_", 1)[1]) if "_" in subdir_name else 0
+        # Trailing digits, so Cat1 and cat_1 both yield 1 (splitting on "_"
+        # gave 0 for every Cat<N> directory).
+        _cm = re.search(r"(\d+)$", subdir_name)
+        cat_num = int(_cm.group(1)) if _cm else 0
 
         for fname in sorted(os.listdir(cat_path)):
             if not fname.endswith(".yml") or fname == "main.yml":
@@ -734,8 +740,7 @@ def _find_audit_subdirs(audit_dir: str) -> List[str]:
         return subdirs
     for entry in sorted(os.listdir(audit_dir)):
         full = os.path.join(audit_dir, entry)
-        if os.path.isdir(full) and (entry.startswith("cat_") or
-                                     entry.startswith("section_")):
+        if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
             subdirs.append(full)
     return subdirs
 
@@ -2069,8 +2074,7 @@ def extract_task_automation_status(
     if os.path.isdir(tasks_dir):
         for entry in sorted(os.listdir(tasks_dir)):
             full = os.path.join(tasks_dir, entry)
-            if os.path.isdir(full) and (entry.startswith("section_") or
-                                         entry.startswith("cat_")):
+            if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
                 task_subdirs.append(entry)
 
     for subdir_name in task_subdirs:
@@ -2178,8 +2182,7 @@ def extract_audit_test_depth(
     audit_subdirs: List[str] = []
     for entry in sorted(os.listdir(audit_dir)):
         full = os.path.join(audit_dir, entry)
-        if os.path.isdir(full) and (entry.startswith("section_") or
-                                     entry.startswith("cat_")):
+        if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
             audit_subdirs.append(full)
 
     for subdir in audit_subdirs:
@@ -2263,8 +2266,7 @@ def extract_task_paths(
     if os.path.isdir(tasks_dir):
         for entry in sorted(os.listdir(tasks_dir)):
             full = os.path.join(tasks_dir, entry)
-            if os.path.isdir(full) and (entry.startswith("section_") or
-                                         entry.startswith("cat_")):
+            if os.path.isdir(full) and re.match(r"(?i)^(cat|section)_?\d", entry):
                 task_subdirs.append(entry)
 
     for subdir_name in task_subdirs:
@@ -3441,7 +3443,25 @@ def main() -> None:
     log = (lambda msg: print(f"  [*] {msg}", file=sys.stderr)) if args.verbose else (lambda _msg: None)
 
     # Paths
+    # Ansible accepts either defaults/main.yml or a defaults/main/ directory. The ten
+    # helpers below each open() a single path, so for the directory layout concatenate
+    # the files into one temporary view rather than change every signature. Without
+    # this every one of them silently reads nothing and their checks pass vacuously.
+    # Caveat: line numbers in findings then refer to the concatenation, not the file.
     defaults_path = os.path.join(remediation_dir, "defaults", "main.yml")
+    if not os.path.isfile(defaults_path):
+        _dir = os.path.join(remediation_dir, "defaults", "main")
+        if os.path.isdir(_dir):
+            _parts = []
+            for _f in sorted(os.listdir(_dir)):
+                if _f.endswith((".yml", ".yaml")):
+                    with open(os.path.join(_dir, _f), "r", encoding="utf-8") as _fh:
+                        _parts.append(_fh.read())
+            _tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yml", delete=False, encoding="utf-8")
+            _tmp.write("\n".join(_parts))
+            _tmp.close()
+            defaults_path = _tmp.name
     # Bridge (audit-vars) template: the New Alignment Strategy renamed
     # ansible_vars_goss.yml.j2 -> lockdown_audit.yml.j2. Resolve whichever
     # exists (prefer the new name), falling back to the legacy name for older repos.

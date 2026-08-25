@@ -1,8 +1,8 @@
 # Cross-Repo Validator
 
-Validates consistency between an Ansible-Lockdown **remediation role** and its paired **Goss audit repo** — supports both **STIG** and **CIS** benchmarks, with or without a `Private-` prefix.
+Validates consistency between an Ansible-Lockdown **remediation role** and its paired **Goss audit repo** - supports both **STIG** and **CIS** benchmarks, with or without a `Private-` prefix.
 
-**Version:** 2.8.1
+**Version:** 2.8.4
 
 ---
 
@@ -36,15 +36,15 @@ Rule toggle variables, Rule_IDs (STIG), version metadata, and category/section a
 
 Key features:
 
-- **Zero external Python dependencies** — uses only the Python 3 standard library
+- **Zero external Python dependencies** - uses only the Python 3 standard library
 - **Supports both STIG and CIS** benchmark types with auto-detection
-- **Handles public and private repos** — works with or without `Private-` prefix
+- **Handles public and private repos** - works with or without `Private-` prefix
 - **Auto-detects** the benchmark prefix, rule ID prefix, audit vars file, and sibling audit repo
 - **Generates reports** in Markdown, JSON, or HTML
 - **Reports include** git branch and benchmark version metadata
 - **`--version` flag** for CI pipeline identification
 - **Selective execution** via `--skip` and `--only` filters
-- **Generic** across all Ansible-Lockdown benchmark pairs (RHEL, Ubuntu, Amazon, Windows, etc.)
+- **Generic** across all Ansible-Lockdown benchmark pairs (RHEL, Ubuntu, Amazon, SUSE, Debian, etc.). Windows roles are out of scope: the validator compares a remediation role against its paired Goss audit repo, and no working Windows audit repo exists
 
 ---
 
@@ -147,7 +147,7 @@ Check keys for --skip / --only:
 
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--version` | `-V` | Show version number and exit | — |
+| `--version` | `-V` | Show version number and exit | - |
 | `--remediation PATH` | `-r` | Path to remediation repo | **Required** |
 | `--audit PATH` | `-a` | Path to audit repo | Auto-discovered |
 | `--type {stig,cis,auto}` | `-t` | Benchmark type | `auto` |
@@ -172,11 +172,11 @@ The tool handles two benchmark families with different naming conventions:
 |--------|---------|---------|
 | Toggle variable | `{prefix}_{6digits}` | `az2023stig_000100` |
 | Audit file name | `{STIG_PREFIX}-{6digits}.yml` | `AZLX-23-000100.yml` |
-| Audit vars file | `vars/STIG.yml` | — |
-| Conditional | `{{ if .Vars.az2023stig_000100 }}` | — |
+| Audit vars file | `vars/STIG.yml` | - |
+| Conditional | `{{ if .Vars.az2023stig_000100 }}` | - |
 | Task name | `SEVERITY \| STIG_ID \| ACTION` | `CAT2 \| AZLX-23-000135 \| ...` |
 | Rule_ID tag | `SV-######r#######_rule` | `SV-273996r1119976_rule` |
-| Category dirs | `cat_1/`, `cat_2/`, `cat_3/` | — |
+| Category dirs | `cat_1/`, `cat_2/`, `cat_3/` | - |
 
 ### CIS Benchmarks
 
@@ -184,17 +184,17 @@ The tool handles two benchmark families with different naming conventions:
 |--------|---------|---------|
 | Toggle variable | `{prefix}_rule_{section}` | `rhel9cis_rule_1_1_1_1` |
 | Audit file name | `{section}.yml` | `1.1.1.1.yml` |
-| Audit vars file | `vars/CIS.yml` | — |
-| Conditional | `{{ if .Vars.rhel9cis_rule_1_1_1_1 }}` | — |
+| Audit vars file | `vars/CIS.yml` | - |
+| Conditional | `{{ if .Vars.rhel9cis_rule_1_1_1_1 }}` | - |
 | Task name | `SECTION \| ACTION` | `1.1.1.1 \| Ensure...` |
-| Rule_ID tag | N/A (CIS doesn't use Rule_IDs) | — |
-| Category dirs | `section_*/` or `cat_*/` | — |
+| Rule_ID tag | N/A (CIS doesn't use Rule_IDs) | - |
+| Category dirs | `section_*/` or `cat_*/` | - |
 
 ### Type Detection
 
 When `--type auto` (the default), the tool examines `defaults/main.yml` for toggle patterns:
-- If `_rule_` patterns are found → **CIS**
-- If `_NNNNNN` (6-digit) patterns are found → **STIG**
+- If `_rule_` patterns are found -> **CIS**
+- If `_NNNNNN` (6-digit) patterns are found -> **STIG**
 
 Override with `-t stig` or `-t cis` if auto-detection guesses wrong.
 
@@ -253,7 +253,7 @@ Extracts `SV-*_rule` strings from remediation task tags and from audit file `Rul
 
 Three-way validation:
 
-1. **Audit filename** vs **audit metadata** — catches copy-paste errors where a file was duplicated but metadata not updated.
+1. **Audit filename** vs **audit metadata** - catches copy-paste errors where a file was duplicated but metadata not updated.
    - STIG: `AZLX-23-000100.yml` vs `STIG_ID: AZLX-23-000100`
    - CIS: `1.1.1.1.yml` vs section metadata
 2. Rule keys present in tasks but missing from audit (informational).
@@ -407,9 +407,9 @@ Three sub-checks:
 
 | Sub-check | What It Validates | Severity |
 |-----------|-------------------|----------|
-| **A: Missing from template** | Goss tests reference `.Vars.xxx` but the template has no output key `xxx` — goss will get an empty value at runtime | error |
-| **B: Undefined defaults** | Template outputs `{{ ubtu20cis_xxx }}` but `ubtu20cis_xxx` is not defined in `defaults/main.yml` — Ansible will fail or produce an empty value | warning |
-| **C: Naming mismatches** | Template output key and goss reference share >70% similarity but differ — likely a typo or rename that wasn't propagated | warning |
+| **A: Missing from template** | Goss tests reference `.Vars.xxx` but the template has no output key `xxx` - goss will get an empty value at runtime | error |
+| **B: Undefined defaults** | Template outputs `{{ ubtu20cis_xxx }}` but `ubtu20cis_xxx` is not defined in `defaults/main.yml` - Ansible will fail or produce an empty value | warning |
+| **C: Naming mismatches** | Template output key and goss reference share >70% similarity but differ - likely a typo or rename that wasn't propagated | warning |
 
 **Smart filtering:**
 
@@ -429,9 +429,9 @@ Parses `handlers/main.yml` for handler names (including `listen:` aliases) and s
 
 | Sub-check | What It Validates | Severity |
 |-----------|-------------------|----------|
-| **Undefined handler** | A `notify:` references a handler name that does not exist in `handlers/main.yml` — Ansible will fail at runtime | error |
-| **Case mismatch** | A `notify:` uses different letter casing than the handler definition — Ansible handler matching is case-sensitive, so this silently skips the handler | warning |
-| **Orphaned handler** | A handler is defined but never referenced by any `notify:` — dead code or a missing notify | info |
+| **Undefined handler** | A `notify:` references a handler name that does not exist in `handlers/main.yml` - Ansible will fail at runtime | error |
+| **Case mismatch** | A `notify:` uses different letter casing than the handler definition - Ansible handler matching is case-sensitive, so this silently skips the handler | warning |
+| **Orphaned handler** | A handler is defined but never referenced by any `notify:` - dead code or a missing notify | info |
 
 **Note:** Handlers referenced via Jinja2 expressions (e.g., `notify: "{{ handler_name }}"`) are skipped since they can't be resolved at parse time.
 
@@ -463,8 +463,8 @@ Classifies each control as **automated**, **manual**, or **partial** by examinin
 
 Then validates that each automated control has a corresponding audit test file with at least one goss assertion. Flags:
 
-- Automated controls with **no audit test file** — remediation runs but is never validated
-- Automated controls with **empty audit tests** — test file exists but contains no assertions
+- Automated controls with **no audit test file** - remediation runs but is never validated
+- Automated controls with **empty audit tests** - test file exists but contains no assertions
 
 **Summary output** includes total automated vs manual counts for tracking automation progress over time.
 
@@ -480,8 +480,8 @@ Extracts literal file paths from remediation task modules (`path:`, `dest:`, she
 
 **Findings appear when:**
 
-- **Remediation writes to a file that the audit does not test** (silent false pass) — severity: warning
-- **Audit tests a file that remediation does not touch** (potential stale test) — severity: info
+- **Remediation writes to a file that the audit does not test** (silent false pass) - severity: warning
+- **Audit tests a file that remediation does not touch** (potential stale test) - severity: info
 
 **False positive mitigation:**
 
@@ -493,7 +493,7 @@ Extracts literal file paths from remediation task modules (`path:`, `dest:`, she
 | Glob chars stripped | `/etc/sudoers*` normalized to `/etc/sudoers` |
 | Empty path sets skipped | Package/service-only controls with no file paths ignored |
 
-Works for both **CIS** and **STIG** benchmarks — toggle patterns and directory structures handled via existing `benchmark_type` logic.
+Works for both **CIS** and **STIG** benchmarks - toggle patterns and directory structures handled via existing `benchmark_type` logic.
 
 **Severity:** warning
 
@@ -576,7 +576,7 @@ Self-contained HTML report with embedded CSS. Features:
 - Monospace file paths, sticky table headers, responsive layout
 - **Print-friendly** `@media print` styles (expands collapsed sections, removes shadows)
 - Generation footer with tool version and date
-- No external dependencies — opens in any browser
+- No external dependencies - opens in any browser
 
 ### JSON
 

@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "2.8.3"
+TOOL_VERSION = "2.8.4"
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -243,6 +243,51 @@ ANSIBLE_BUILTIN_MODULES: Set[str] = {
     "yum", "yum_repository",
 }
 
+# Windows module short names mapped to their collection. No ansible.builtin
+# module starts with "win_", so a bare win_* task key is always non-FQCN - the
+# prefix itself is the signal and this map only supplies the remediation text.
+# Deliberately limited to modules whose collection is unambiguous in the roles
+# themselves rather than a hand-copied catalogue: win_audit_policy_system is
+# omitted because the fleet uses it under both ansible.windows and
+# community.windows, so naming one would be a guess.
+WINDOWS_MODULE_COLLECTIONS: Dict[str, str] = {
+    "setup": "ansible.windows",
+    "win_acl": "ansible.windows",
+    "win_acl_inheritance": "ansible.windows",
+    "win_command": "ansible.windows",
+    "win_feature": "ansible.windows",
+    "win_file": "ansible.windows",
+    "win_find": "ansible.windows",
+    "win_optional_feature": "ansible.windows",
+    "win_reboot": "ansible.windows",
+    "win_reg_stat": "ansible.windows",
+    "win_regedit": "ansible.windows",
+    "win_service": "ansible.windows",
+    "win_service_info": "ansible.windows",
+    "win_shell": "ansible.windows",
+    "win_stat": "ansible.windows",
+    "win_template": "ansible.windows",
+    "win_user": "ansible.windows",
+    "win_user_right": "ansible.windows",
+    "win_disk_facts": "community.windows",
+    "win_security_policy": "community.windows",
+}
+
+
+def _fqcn_suggestion(key: str) -> str:
+    """Remediation text for a bare module name."""
+    if key in ANSIBLE_BUILTIN_MODULES:
+        return f"'ansible.builtin.{key}'"
+    collection = WINDOWS_MODULE_COLLECTIONS.get(key)
+    if collection:
+        return f"'{collection}.{key}'"
+    return "a fully qualified name (ansible.windows.* or community.windows.*)"
+
+
+def _is_bare_module(key: str) -> bool:
+    """True when a task-level key is an unqualified module name."""
+    return key in ANSIBLE_BUILTIN_MODULES or key.startswith("win_")
+
 # Ansible task-level keywords (NOT module names)
 TASK_KEYWORDS: Set[str] = {
     "name", "when", "register", "tags", "vars", "block", "rescue", "always",
@@ -285,6 +330,85 @@ def discover_qa_artifact_paths(directory: str) -> Set[str]:
         if is_qa_artifact_basename(fname):
             paths.add(os.path.abspath(os.path.join(directory, fname)))
     return paths
+
+
+def defaults_files(role_dir: str) -> List[str]:
+    """Return the role's defaults file(s).
+
+    Ansible accepts either a single ``defaults/main.yml`` or a ``defaults/main/``
+    directory, in which case every YAML file inside it is loaded. Sorted so callers
+    see the same order Ansible does (alphabetical), which matters because a key
+    defined in two files resolves to whichever loads last.
+    """
+    base = os.path.join(role_dir, "defaults")
+    single = os.path.join(base, "main.yml")
+    if os.path.isfile(single):
+        return [single]
+    as_dir = os.path.join(base, "main")
+    if os.path.isdir(as_dir):
+        return sorted(
+            os.path.join(as_dir, f)
+            for f in os.listdir(as_dir)
+            if f.endswith((".yml", ".yaml"))
+        )
+    return []
+
+
+WINDOWS_COLLECTION_PREFIXES = ("ansible.windows.", "community.windows.")
+
+
+def is_windows_role(role_dir: str) -> bool:
+    """True when the role targets Windows.
+
+    Windows roles differ structurally from the Linux Ansible-Lockdown roles:
+    they have no ``vars/audit.yml``, no paired goss audit repo, and use
+    ``ansible.windows`` modules rather than POSIX shell. Checks that are
+    meaningless against that shape consult this so they can skip themselves,
+    instead of every Windows repo having to hand-write ``skip_checks``.
+
+    Primary signal is a declared Windows platform in ``meta/main.yml``, which
+    both the top-level and ``galaxy_info``-nested layouts express. Falls back
+    to Windows module usage so a role with absent or malformed meta still
+    classifies.
+    """
+    meta = os.path.join(role_dir, "meta", "main.yml")
+    if os.path.isfile(meta):
+        # _load_yaml_file keeps PyYAML optional, as the rest of the tool does.
+        data = _load_yaml_file(meta)
+        if isinstance(data, dict):
+            src = data.get("galaxy_info") or data
+            if isinstance(src, dict):
+                for entry in src.get("platforms") or []:
+                    if isinstance(entry, dict) and str(
+                            entry.get("name", "")).strip().lower() == "windows":
+                        return True
+
+    for sub in ("tasks", "handlers"):
+        path = os.path.join(role_dir, sub)
+        if not os.path.isdir(path):
+            continue
+        for root, _, files in os.walk(path):
+            for fname in files:
+                if not fname.endswith((".yml", ".yaml")):
+                    continue
+                try:
+                    with open(os.path.join(root, fname), "r",
+                              encoding="utf-8", errors="replace") as fh:
+                        content = fh.read()
+                except OSError:
+                    continue
+                if any(p in content for p in WINDOWS_COLLECTION_PREFIXES):
+                    return True
+    return False
+
+
+def defaults_label(role_dir: str) -> str:
+    """Reporting label for the defaults location, for finding messages."""
+    files = defaults_files(role_dir)
+    if len(files) == 1 and os.path.basename(files[0]) == "main.yml" \
+            and os.path.basename(os.path.dirname(files[0])) == "defaults":
+        return "defaults/main.yml"
+    return "defaults/main/"
 
 
 def _relpath(filepath: str, base: str) -> str:
@@ -458,8 +582,17 @@ class RepoScanner:
         self._files_cache: Dict[str, List[str]] = {}
         self._cache_lock = threading.Lock()
         self.status = StatusLine(enabled=progress)
-        self.benchmark_prefix = benchmark_prefix or self._auto_detect_prefix()
-        self.benchmark_type = self._detect_benchmark_type()
+        shared_prefix, shared_type = self._shared_detect()
+        self.benchmark_prefix = (benchmark_prefix or shared_prefix
+                                 or self._auto_detect_prefix())
+        if benchmark_prefix or not shared_type:
+            # An explicit -b, or a shape the shared detector does not know:
+            # derive the type locally for whatever prefix we ended up with.
+            self.benchmark_type = self._detect_benchmark_type()
+        else:
+            self.benchmark_type = shared_type
+        # Consulted by the three checks that have no Windows meaning.
+        self.is_windows = is_windows_role(directory)
 
     # -- file cache ---------------------------------------------------------
 
@@ -513,9 +646,9 @@ class RepoScanner:
         of 1-3 underscore-delimited parts and vote for each. Shorter prefixes
         naturally accumulate more votes, producing the common root prefix.
         """
-        defaults = os.path.join(self.directory, "defaults", "main.yml")
         counter: Counter = Counter()
-        for line in self.read_lines(defaults):
+        for line in (l for f in defaults_files(self.directory)
+                     for l in self.read_lines(f)):
             s = line.rstrip()
             if not s or s.startswith("#") or s[0] in (" ", "\t"):
                 continue
@@ -540,6 +673,23 @@ class RepoScanner:
     def get_repo_name(self) -> str:
         return os.path.basename(os.path.abspath(self.directory))
 
+    def _shared_detect(self) -> Tuple[str, str]:
+        """Prefix and benchmark type from the shared detector in scripts/.
+
+        ``scripts/check_rule_coverage.py`` owns the authoritative toggle-shape
+        patterns, including the Windows ``{prefix}_{family}_{6digits}`` form.
+        Keeping a second, weaker copy here is what let Rule Coverage silently
+        examine zero toggles on the roles whose prefix has an extra segment.
+        Returns ("", "") when the helper is unavailable or cannot decide, and
+        the caller falls back to the local detection.
+        """
+        try:
+            checker = _load_check_rule_coverage_module()
+            prefix, bm_type = checker.detect_prefix_and_type(self.directory)
+        except (ImportError, OSError, AttributeError):
+            return "", ""
+        return prefix or "", bm_type or ""
+
     def _detect_benchmark_type(self) -> str:
         """Detect whether this is a CIS or STIG benchmark.
 
@@ -548,13 +698,13 @@ class RepoScanner:
         """
         if not self.benchmark_prefix:
             return "cis"
-        defaults = os.path.join(self.directory, "defaults", "main.yml")
         rule_pat = re.compile(rf"^{re.escape(self.benchmark_prefix)}_rule_\d")
         stig_pat = re.compile(
             rf"^{re.escape(self.benchmark_prefix)}_\d{{6}}\s*:")
         cis_count = 0
         stig_count = 0
-        for line in self.read_lines(defaults):
+        for line in (l for f in defaults_files(self.directory)
+                     for l in self.read_lines(f)):
             stripped = line.strip()
             if rule_pat.match(stripped):
                 cis_count += 1
@@ -564,8 +714,8 @@ class RepoScanner:
 
     def get_benchmark_version(self) -> str:
         """Extract benchmark_version from defaults/main.yml."""
-        defaults = os.path.join(self.directory, "defaults", "main.yml")
-        for line in self.read_lines(defaults):
+        for line in (l for f in defaults_files(self.directory)
+                     for l in self.read_lines(f)):
             m = re.match(r"^benchmark_version:\s*['\"]?([^'\"#\n]+)", line)
             if m:
                 return m.group(1).strip()
@@ -940,7 +1090,7 @@ class UnusedVarCheck:
         """Return {var_name: (relative_file, line)} from all var sources."""
         result: Dict[str, Tuple[str, int]] = {}
         sources = [
-            os.path.join(self.d, "defaults", "main.yml"),
+            *defaults_files(self.d),
             os.path.join(self.d, "vars", "main.yml"),
             os.path.join(self.d, "vars", "audit.yml"),
         ]
@@ -980,7 +1130,7 @@ class UnusedVarCheck:
 
         # Phase 2: collect tokens from var files (excluding definition lines)
         var_files = [
-            os.path.join(self.d, "defaults", "main.yml"),
+            *defaults_files(self.d),
             os.path.join(self.d, "vars", "main.yml"),
             os.path.join(self.d, "vars", "audit.yml"),
         ]
@@ -1071,8 +1221,8 @@ class UnusedVarCheck:
                         in_vars_block = False
 
         all_defined = set(defined.keys()) | dynamic_vars | ANSIBLE_BUILTINS
-        defaults_path = os.path.join(self.d, "defaults", "main.yml")
-        for raw in self.scanner.read_lines(defaults_path):
+        for raw in (l for f in defaults_files(self.d)
+                    for l in self.scanner.read_lines(f)):
             cm = re.match(r"^#\s*(" + re.escape(prefix) + r"\w+):", raw)
             if cm:
                 all_defined.add(cm.group(1))
@@ -1224,23 +1374,31 @@ class VarNamingCheck:
 
     def _duplicate_defaults(self) -> List[Finding]:
         findings: List[Finding] = []
-        defaults = os.path.join(self.d, "defaults", "main.yml")
-        seen: Dict[str, int] = {}
-        for num, raw in enumerate(self.scanner.read_lines(defaults), 1):
-            s = raw.rstrip()
-            if not s or s.startswith("#") or s[0] in (" ", "\t"):
-                continue
-            m = re.match(r"^([a-zA-Z_]\w*):", s)
-            if m:
+        # A defaults/main/ directory introduces a second way to duplicate a key: the
+        # same name in two different files. Ansible loads them alphabetically, so the
+        # later file silently wins. Track (file, line) to report both cases.
+        seen: Dict[str, Tuple[str, int]] = {}
+        for path in defaults_files(self.d):
+            rel = _relpath(path, self.d)
+            for num, raw in enumerate(self.scanner.read_lines(path), 1):
+                s = raw.rstrip()
+                if not s or s.startswith("#") or s[0] in (" ", "\t"):
+                    continue
+                m = re.match(r"^([a-zA-Z_]\w*):", s)
+                if not m:
+                    continue
                 var = m.group(1)
                 if var in seen:
+                    prev_file, prev_line = seen[var]
+                    where = (f"line {prev_line}" if prev_file == rel
+                             else f"{prev_file}:{prev_line}")
                     findings.append(Finding(
-                        "defaults/main.yml", num,
+                        rel, num,
                         f"Duplicate default variable '{var}' "
-                        f"(first defined at line {seen[var]})",
+                        f"(first defined at {where})",
                         "warning", "var_naming"))
                 else:
-                    seen[var] = num
+                    seen[var] = (rel, num)
         return findings
 
 
@@ -1497,6 +1655,13 @@ class AuditTemplateCheck:
         return findings
 
     def run(self) -> CheckResult:
+        if self.scanner.is_windows:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary="Windows role: no goss audit bridge template "
+                        "(templates/lockdown_audit.yml.j2) exists",
+            )
+
         findings: List[Finding] = []
         templates_dir = os.path.join(self.scanner.directory, "templates")
         scanned: List[str] = []
@@ -1517,6 +1682,22 @@ class AuditTemplateCheck:
         status = "PASS" if not findings else "FAIL"
         summary = f"{len(findings)} issue(s) in {', '.join(scanned)}"
         return CheckResult(self.display_name, status, findings, summary)
+
+
+def _load_check_rule_coverage_module():
+    """Import scripts/check_rule_coverage.py without installing a package."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "scripts",
+        "check_rule_coverage.py",
+    )
+    spec = importlib.util.spec_from_file_location("_check_rule_coverage", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load rule coverage checker from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_check_audit_vars_module():
@@ -1543,6 +1724,14 @@ class AuditVarsCheck:
         self.scanner = scanner
 
     def run(self) -> CheckResult:
+        if self.scanner.is_windows:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary="Windows role: the audit_* variable family belongs to "
+                        "roles paired with a goss audit repo; there is no "
+                        "working Windows audit",
+            )
+
         try:
             checker = _load_check_audit_vars_module()
         except ImportError as exc:
@@ -1598,6 +1787,14 @@ class ShellPipefailCheck:
         self.scanner = scanner
 
     def run(self) -> CheckResult:
+        if self.scanner.is_windows:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary="Windows role: POSIX 'set -o pipefail' and "
+                        "args.executable have no meaning for "
+                        "ansible.windows.win_shell",
+            )
+
         try:
             checker = _load_check_shell_pipefail_module()
             scan_mod = checker._load_scan_module()
@@ -1669,11 +1866,11 @@ class FQCNCheck:
                     if um:
                         task_indent = len(um.group(1)) + 2
                         key = um.group(2)
-                        if key in ANSIBLE_BUILTIN_MODULES and key not in TASK_KEYWORDS:
+                        if _is_bare_module(key) and key not in TASK_KEYWORDS:
                             findings.append(Finding(
                                 rel, num,
                                 f"Non-FQCN module: '{key}' -> "
-                                f"'ansible.builtin.{key}'",
+                                f"{_fqcn_suggestion(key)}",
                                 "warning", "fqcn"))
                         continue
 
@@ -1689,11 +1886,11 @@ class FQCNCheck:
                     km = re.match(r"^(\s+)([a-z][a-z0-9_]*):\s", raw)
                     if km and len(km.group(1)) == task_indent:
                         key = km.group(2)
-                        if key in ANSIBLE_BUILTIN_MODULES and key not in TASK_KEYWORDS:
+                        if _is_bare_module(key) and key not in TASK_KEYWORDS:
                             findings.append(Finding(
                                 rel, num,
                                 f"Non-FQCN module: '{key}' -> "
-                                f"'ansible.builtin.{key}'",
+                                f"{_fqcn_suggestion(key)}",
                                 "warning", "fqcn"))
         status = "PASS" if not findings else "WARN"
         return CheckResult(self.display_name, status, findings,
@@ -1843,9 +2040,18 @@ class RuleCoverageCheck:
             return CheckResult(self.display_name, "SKIP",
                                summary="No benchmark prefix detected")
 
-        # Build pattern based on benchmark type (CIS vs STIG)
+        # Build pattern based on benchmark type (CIS vs STIG vs Windows STIG)
         bm_type = self.scanner.benchmark_type
-        if bm_type == "stig":
+        if bm_type == "stig_win":
+            # Windows toggles carry a 2-character family segment between the
+            # prefix and the id, e.g. wn11_cc_000010.
+            rule_pat = re.compile(
+                rf"^({re.escape(prefix)}_[a-z0-9]{{2}}_\d{{6}})\s*:",
+                re.IGNORECASE)
+            ref_pat = re.compile(
+                rf"\b({re.escape(prefix)}_[a-z0-9]{{2}}_\d{{6}})\b",
+                re.IGNORECASE)
+        elif bm_type == "stig":
             rule_pat = re.compile(
                 rf"^({re.escape(prefix)}_\d{{6}})\s*:")
             ref_pat = re.compile(
@@ -1858,8 +2064,9 @@ class RuleCoverageCheck:
 
         # Collect defined rule vars from defaults/main.yml
         defined_rules: Dict[str, int] = {}
-        defaults = os.path.join(self.d, "defaults", "main.yml")
-        for num, line in enumerate(self.scanner.read_lines(defaults), 1):
+        for num, line in enumerate(
+                (l for f in defaults_files(self.d)
+                 for l in self.scanner.read_lines(f)), 1):
             m = rule_pat.match(line.rstrip())
             if m:
                 defined_rules[m.group(1)] = num
@@ -1877,6 +2084,17 @@ class RuleCoverageCheck:
                     rule = rm.group(1)
                     if rule not in referenced_rules:
                         referenced_rules[rule] = (rel, num)
+
+        # No silent vacuum. Finding nothing on either side means the toggle
+        # shape was not recognised, not that the role is clean: comparing two
+        # empty sets yields no discrepancy and would otherwise report PASS.
+        # That is how this check went unnoticed while examining zero toggles.
+        if not defined_rules and not referenced_rules:
+            return CheckResult(
+                self.display_name, "SKIP",
+                summary=f"No '{prefix}' rule toggles recognised "
+                        f"(benchmark type '{bm_type}') - nothing was compared",
+            )
 
         # Orphaned: defined but never used in tasks
         for rule in sorted(defined_rules):
@@ -2566,8 +2784,12 @@ class BaselineManager:
                 for r in results for f in r.findings
             ],
         }
+        # Trailing newline is required, not cosmetic. Consumers of this file run the
+        # pre-commit end-of-file-fixer hook, which fails on a file ending in "}" with no
+        # newline - so a freshly saved baseline would fail the very repo it was generated
+        # for. json.dump omits it; json.dumps + "\n" is the form used elsewhere here.
         with open(filepath, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
+            fh.write(json.dumps(data, indent=2) + "\n")
 
     @staticmethod
     def load(filepath: str) -> Dict[str, Any]:
@@ -2625,7 +2847,7 @@ def _resolve_directory(user_dir: Optional[str]) -> str:
             sys.exit(1)
         return resolved
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    if os.path.isfile(os.path.join(script_dir, "defaults", "main.yml")):
+    if defaults_files(script_dir):
         return script_dir
     return os.path.abspath(os.getcwd())
 
@@ -2704,9 +2926,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     directory = _resolve_directory(args.directory)
-    defaults = os.path.join(directory, "defaults", "main.yml")
-    if not os.path.isfile(defaults):
-        print(f"Error: '{defaults}' not found. "
+    if not defaults_files(directory):
+        print(f"Error: no defaults found in '{os.path.join(directory, 'defaults')}' "
+              "(expected main.yml or a main/ directory). "
               "Are you in an Ansible role directory?\n"
               "Use -d /path/to/role to specify the role directory.",
               file=sys.stderr)

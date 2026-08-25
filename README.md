@@ -2,7 +2,7 @@
 
 Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/ansible-lockdown) CIS/STIG hardening roles.
 
-**Version:** 2.8.1
+**Version:** 2.8.4
 
 ---
 
@@ -13,6 +13,7 @@ Comprehensive quality assurance tool for [Ansible-Lockdown](https://github.com/a
 - [Quick Start](#quick-start)
 - [CLI Reference](#cli-reference)
 - [Checks](#checks)
+- [Windows Roles](#windows-roles)
 - [Report Formats](#report-formats)
 - [Auto-Fix Mode](#auto-fix-mode)
 - [Baseline / Delta Mode](#baseline--delta-mode)
@@ -35,7 +36,8 @@ Key features:
 
 - **Zero external Python dependencies** -- uses only the Python standard library
 - **Auto-detects** the benchmark variable prefix (e.g., `rhel9cis`, `ubuntu2204cis`) and benchmark type (CIS vs STIG)
-- **Full CIS and STIG support** -- rule coverage checks work for both `{prefix}_rule_X_X_X` (CIS) and `{prefix}_XXXXXX` (STIG) toggle patterns
+- **Full CIS and STIG support** -- rule coverage checks work for `{prefix}_rule_X_X_X` (CIS), `{prefix}_XXXXXX` (Linux STIG) and `{prefix}_{family}_XXXXXX` (Windows STIG) toggle patterns
+- **Linux and Windows roles** -- Windows roles are detected structurally, and the checks with no Windows meaning skip themselves (see [Windows Roles](#windows-roles))
 - **Generates reports** in Markdown, HTML, or JSON with repo name, benchmark version, and timestamp in filenames
 - **Auto-fix mode** for common issues (spelling, file mode quoting, FQCN)
 - **Baseline/delta mode** for incremental QA in CI pipelines
@@ -128,6 +130,20 @@ When `-d` is not specified, the tool resolves the role directory in this order:
 1. The directory containing the script itself (useful when the script lives inside the role)
 2. The current working directory
 
+### Defaults Layout
+
+A role's defaults may take either shape Ansible accepts, and the tool reads both:
+
+| Layout | What the tool reads |
+|--------|--------------------|
+| `defaults/main.yml` | that single file |
+| `defaults/main/` directory | every `*.yml` / `*.yaml` file inside it |
+
+Files in a `defaults/main/` directory are read in alphabetical order, matching Ansible's own load
+order. That order matters: a key defined in two files resolves to whichever loads **last**, so
+`audit.yml` is read before `main.yml` and a duplicate key would silently take the `main.yml` value.
+The duplicate-key check reports exactly this case.
+
 ---
 
 ## Checks
@@ -140,17 +156,17 @@ The tool runs 15 independent checks. Each produces a status of **PASS**, **FAIL*
 | 2 | **Ansible Lint** | `ansiblelint` | Runs `ansible-lint -f pep8`. Skipped if `ansible-lint` is not installed. |
 | 3 | **Spell Check** | `spelling` | Scans comments and task `name:` fields for ~130 common misspellings. Jinja2 expressions are stripped before checking. |
 | 4 | **Grammar Check** | `grammar` | Detects repeated words, double spaces, missing apostrophes, and subject-verb disagreement in comments and task names. Jinja2 expressions are stripped before checking. |
-| 5 | **Unused Variables** | `unused_vars` | **Forward:** Variables defined in `defaults/main.yml` or `vars/` but never referenced. **Reverse:** Variables with the benchmark prefix referenced in tasks but never defined. |
+| 5 | **Unused Variables** | `unused_vars` | **Forward:** Variables defined in the role defaults (`defaults/main.yml` or `defaults/main/`) or `vars/` but never referenced. **Reverse:** Variables with the benchmark prefix referenced in tasks but never defined. |
 | 6 | **Variable Naming** | `var_naming` | Validates `register:` variable prefixes, detects duplicate register names (with mutually exclusive `when:` suppression), and duplicate defaults. |
 | 7 | **File Mode Quoting** | `file_mode` | Flags unquoted numeric `mode:` values (e.g., `mode: 0644` should be `mode: '0644'`). |
 | 8 | **Company Naming** | `company_naming` | Detects outdated company name references (configurable). |
 | 9 | **Meta Validate** | `meta_validate` | Checks `meta/main.yml` for author, company, and `min_ansible_version`. |
 | 10 | **Audit Template** | `audit_template` | Checks `templates/lockdown_audit.yml.j2` and `templates/ansible_vars_goss.yml.j2` for duplicate keys. |
-| 11 | **Audit Variable Placement** | `audit_vars` | Validates audit variable placement between `defaults/main.yml` (user-overridable toggles) and `vars/audit.yml` (role-internal constants). Delegates to `scripts/check_audit_vars.py`. |
+| 11 | **Audit Variable Placement** | `audit_vars` | Validates audit variable placement between the role defaults (user-overridable toggles) and `vars/audit.yml` (role-internal constants). Delegates to `scripts/check_audit_vars.py`. |
 | 12 | **Shell Pipefail Layout** | `shell_pipefail` | Validates `ansible.builtin.shell` tasks for `set -o pipefail` and `args: executable:`. Delegates to `scripts/check_shell_pipefail.py`. |
-| 13 | **FQCN Usage** | `fqcn` | Detects bare (non-FQCN) Ansible built-in module names (e.g., `command:` should be `ansible.builtin.command:`). |
+| 13 | **FQCN Usage** | `fqcn` | Detects bare (non-FQCN) module names -- Ansible built-ins (`command:` -> `ansible.builtin.command:`) and Windows modules (`win_regedit:` -> `ansible.windows.win_regedit:`).  |
 | 14 | **Manual Warn Count** | `manual_warn` | Checks that manual-remediation tasks include the `warning_facts.yml` Warn Count block. |
-| 15 | **Rule Coverage** | `rule_coverage` | Cross-references rule toggle variables in `defaults/main.yml` against task `when:` conditions to find orphaned or missing rules. Auto-detects CIS (`{prefix}_rule_X_X_X`) vs STIG (`{prefix}_XXXXXX`) toggle patterns. |
+| 15 | **Rule Coverage** | `rule_coverage` | Cross-references rule toggle variables in the role defaults against task `when:` conditions to find orphaned or missing rules. Auto-detects CIS (`{prefix}_rule_X_X_X`), Linux STIG (`{prefix}_XXXXXX`) and Windows STIG (`{prefix}_{family}_XXXXXX`, e.g. `wn11_cc_000010`) toggle patterns. |
 
 ### Skipping Checks
 
@@ -195,6 +211,55 @@ python3 Ansible_Lockdown_QA_Repo_Check.py --min-severity warning --console --no-
 
 ---
 
+## Windows Roles
+
+Windows roles are supported. They differ structurally from the Linux roles, so the tool detects them
+and adjusts rather than reporting findings no change to the role could resolve.
+
+A role is treated as Windows when `meta/main.yml` declares a Windows platform:
+
+```yaml
+galaxy_info:
+  platforms:
+    - name: Windows
+      versions: ["all"]
+```
+
+Windows module usage (`ansible.windows.*`, `community.windows.*`) is used as a fallback signal, so a
+role with absent or malformed meta still classifies correctly.
+
+### Structural differences
+
+| | Linux role | Windows role |
+|---|---|---|
+| Rule toggles | `{prefix}_XXXXXX` (`rhel_09_211010`) | `{prefix}_{family}_XXXXXX` (`wn11_cc_000010`) |
+| Task layout | `tasks/cat_1/`, `tasks/Cat1/`, `tasks/section_1/` | `tasks/Cat1` .. `tasks/Cat3` |
+| Modules | `ansible.builtin.*` | `ansible.windows.*`, `community.windows.*` |
+| Audit stack | paired goss audit repo, `vars/audit.yml` | none |
+
+The family segment is what makes the Windows toggle shape distinct. It is usually alphabetic (`cc`,
+`au`, `so`, `ur`, `ac`) but is sometimes numeric (`00`), and both forms are recognised.
+
+### Checks that skip themselves on a Windows role
+
+These three are structurally inapplicable, not merely noisy. They report **SKIP** with the reason
+named, so no per-repo `skip_checks` entry is needed:
+
+| Check | Why |
+|-------|-----|
+| `audit_template` | looks for `templates/lockdown_audit.yml.j2`; no Windows role has one |
+| `audit_vars` | the `audit_*` variable family belongs to roles paired with a goss audit repo, and there is no working Windows audit |
+| `shell_pipefail` | POSIX `set -o pipefail` and `args: executable:` have no meaning for `ansible.windows.win_shell` |
+
+Every other check applies. `file_mode` is harmless rather than excluded: Windows roles do not set a
+POSIX `mode:`, so it simply finds nothing.
+
+The **cross-repo validator** (`scripts/cross_repo_validator/`) is not applicable to Windows roles at
+all, because it compares a remediation role against its paired goss audit repo and no working Windows
+audit repo exists.
+
+---
+
 ## Report Formats
 
 ### Default Output Naming
@@ -207,7 +272,7 @@ qa_report_{repo}_{version}_{timestamp}.{ext}
 
 For example: `qa_report_RHEL9-CIS_v1_0_0_2026-02-27_143012.md`
 
-The benchmark version is read from `benchmark_version:` in `defaults/main.yml`. If not found, `unknown` is used.
+The benchmark version is read from `benchmark_version:` in the role defaults (`defaults/main.yml`, or any file in a `defaults/main/` directory). If not found, `unknown` is used.
 
 ### Markdown (default)
 
@@ -440,8 +505,8 @@ This tool can be used as a [pre-commit](https://pre-commit.com/) hook so QA chec
 Add the following to your Ansible role's `.pre-commit-config.yaml`:
 
 ```yaml
-- repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.8.1  # pin to a release tag
+- repo: https://github.com/frederickw082922/Repo_QA_Checker
+  rev: "2.8.4"  # pin to a release tag (no "v" prefix)
   hooks:
     - id: ansible-lockdown-qa
 ```
@@ -453,8 +518,8 @@ The hook runs with sensible defaults: `-d . --strict --console --no-report`. It 
 You can override the default `args` in your `.pre-commit-config.yaml`:
 
 ```yaml
-- repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.8.1
+- repo: https://github.com/frederickw082922/Repo_QA_Checker
+  rev: "2.8.4"
   hooks:
     - id: ansible-lockdown-qa
       args: ['-d', '.', '--console', '--no-report', '--skip', 'grammar']
@@ -465,8 +530,8 @@ You can override the default `args` in your `.pre-commit-config.yaml`:
 By default, the `yamllint` and `ansible-lint` checks are skipped gracefully when those tools are not installed. To include them, add `additional_dependencies`:
 
 ```yaml
-- repo: https://github.com/ansible-lockdown/Repo_QA_Checker
-  rev: v2.8.1
+- repo: https://github.com/frederickw082922/Repo_QA_Checker
+  rev: "2.8.4"
   hooks:
     - id: ansible-lockdown-qa
       additional_dependencies: ['yamllint', 'ansible-lint']
@@ -653,13 +718,13 @@ The `scripts/` directory contains standalone Python scripts for targeted fixes a
 | Script | Description |
 |--------|-------------|
 | `check_var_naming.py` | Register prefix validation, duplicate detection, forward/reverse coverage |
-| `dependency_graph.py` | Variable dependency graph — maps every register/set_fact to all references |
+| `dependency_graph.py` | Variable dependency graph - maps every register/set_fact to all references |
 | `check_rule_coverage.py` | Rule toggle ↔ task coverage gaps |
-| `fix_fqcn.py` | Bare module names → `ansible.builtin.*` |
+| `fix_fqcn.py` | Bare module names -> `ansible.builtin.*` |
 | `fix_warn_count.py` | Missing Warn Count blocks on manual remediation tasks |
 | `cross_repo_validator.py` | Validates remediation + audit repo pairs |
 
-**Quick example — dependency graph:**
+**Quick example - dependency graph:**
 
 ```bash
 # See all references for a specific variable
@@ -712,12 +777,13 @@ ansible-lockdown-qa -d /path/to/role --console --no-report
 
 ## Troubleshooting
 
-### "Error: defaults/main.yml not found. Are you in an Ansible role directory?"
+### "Error: no defaults found in '<path>/defaults' (expected main.yml or a main/ directory)."
 
-The tool could not locate `defaults/main.yml`. This happens when:
+The tool could not locate the role's defaults in either supported layout. This happens when:
 
 - You are running from outside the role directory without `-d`
 - The path provided with `-d` is not an Ansible role
+- The role has neither a `defaults/main.yml` nor a `defaults/main/` directory containing YAML files
 
 **Fix:** Use `-d /path/to/role` to specify the role directory explicitly.
 
