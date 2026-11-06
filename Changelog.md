@@ -4,6 +4,21 @@ All notable changes to the Ansible-Lockdown QA Repository Check Tool are documen
 
 ---
 
+## Unreleased
+
+### Fixed
+
+- **Shell pipefail: a `shell:` task given as a mapping with `cmd: |` was read as an empty shell
+  block.** The checker reported it as missing the `|` indicator, and the fixer would add one, turning
+  the mapping into a literal command. That form is needed where the free-form argument splitter cannot
+  parse the command's quoting (ansible-lint parser-error), so it is now checked rather than rewritten:
+  `set -o pipefail` must be the first line of `cmd:`, the scalar must be `|`, and `executable:` must be
+  set. The fixer reports it as a manual fix.
+- **`check_shell_pipefail.py` warned about a missing `*_shell_executable` on roles with no shell
+  tasks**, which is every Windows role. The warning now needs at least one `ansible.builtin.shell` task.
+- **`check_shell_pipefail.py` labelled a folded `>` multi-line scalar as "set -o pipefail present but
+  not first content line".** It now names the folded scalar and says to convert it to `|` by hand.
+
 ## 2.8.4 - 2026-08-21
 
 ### Added
