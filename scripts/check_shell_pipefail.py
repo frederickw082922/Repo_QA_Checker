@@ -104,6 +104,17 @@ def _find_roles(root: str) -> list[str]:
     return sorted(roles)
 
 
+SHELL_TASK_RE = re.compile(r"^\s+ansible\.builtin\.shell:", re.M)
+
+
+def _has_shell_task(filepath: str) -> bool:
+    try:
+        with open(filepath, encoding="utf-8") as fh:
+            return bool(SHELL_TASK_RE.search(fh.read()))
+    except OSError:
+        return False
+
+
 def check_role(role_path: str, scan_mod) -> RoleReport:
     role_path = os.path.abspath(role_path)
     report = RoleReport(role_path=role_path)
@@ -119,14 +130,16 @@ def check_role(role_path: str, scan_mod) -> RoleReport:
         ))
         return report
 
-    if not exec_var:
+    task_files = scan_mod.find_yaml_files(tasks_dir)
+    # A role with no shell tasks (every Windows role) has no use for the variable.
+    if not exec_var and any(_has_shell_task(f) for f in task_files):
         report.issues.append(Issue(
             severity="warning",
             message="No *_shell_executable variable in vars/main.yml or the role defaults",
             file="vars/main.yml",
         ))
 
-    for filepath in scan_mod.find_yaml_files(tasks_dir):
+    for filepath in task_files:
         rel = os.path.relpath(filepath, role_path)
         try:
             _lines, fixes, warnings = scan_mod.scan_file(filepath)
@@ -139,9 +152,18 @@ def check_role(role_path: str, scan_mod) -> RoleReport:
             continue
 
         for warn in warnings:
+            if warn["type"] == "cmd_form":
+                severity, message = "error", scan_mod.cmd_form_message(warn)
+            elif warn["type"] == "folded_multiline":
+                severity = "warning"
+                message = ("folded '>' scalar with a multi-line body - convert to '|' "
+                           "by hand before adding set -o pipefail")
+            else:
+                severity = "warning"
+                message = "set -o pipefail present but not first content line"
             report.issues.append(Issue(
-                severity="warning",
-                message="set -o pipefail present but not first content line",
+                severity=severity,
+                message=message,
                 file=rel,
                 line=warn["line_idx"] + 1,
             ))

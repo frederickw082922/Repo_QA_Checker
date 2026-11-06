@@ -177,6 +177,54 @@ def find_args_cmd(lines, shell_line_idx, shell_indent):
     return None
 
 
+CMD_KEY_RE = re.compile(r"^(\s+)cmd:(.*)$")
+
+
+def find_shell_cmd_form(lines, shell_line_idx, shell_indent):
+    """Return a dict when the shell module is given as a mapping with a cmd: key.
+
+    needs_pipefail: set -o pipefail is not the first line of the command.
+    folded: cmd uses a folded '>' scalar, where the pipefail line folds into
+    the command and never applies.
+    """
+    k = shell_line_idx + 1
+    while k < len(lines) and not lines[k].strip():
+        k += 1
+    if k >= len(lines):
+        return None
+    m = CMD_KEY_RE.match(lines[k].rstrip("\n"))
+    if not m or len(m.group(1)) <= shell_indent:
+        return None
+    cmd_indent = len(m.group(1))
+    value = m.group(2).strip()
+    folded = value.startswith(">")
+    if BLOCK_INDICATOR_RE.match(value):
+        first = None
+        for j in range(k + 1, len(lines)):
+            if not lines[j].strip():
+                continue
+            if leading_spaces(lines[j]) <= cmd_indent:
+                break
+            first = lines[j].strip()
+            break
+    else:
+        first, _ = parse_inline_value(value)
+    needs_pipefail = not (first or "").startswith("set -o pipefail")
+    return {"needs_pipefail": needs_pipefail, "folded": folded}
+
+
+def cmd_form_message(finding):
+    """Describe what a shell cmd: form task is missing."""
+    parts = []
+    if finding.get("folded"):
+        parts.append("cmd: uses a folded '>' scalar, use '|'")
+    if finding.get("needs_pipefail"):
+        parts.append("set -o pipefail is not the first line of cmd:")
+    if not finding.get("has_args"):
+        parts.append("missing executable:")
+    return "shell cmd: form - " + "; ".join(parts)
+
+
 def collect_shell_body_commands(lines, shell_line_idx, shell_indent):
     """Return shell block body lines that appear before the task args: block."""
     commands = []
@@ -273,6 +321,16 @@ def scan_file(filepath, exec_var=DEFAULT_EXEC_VAR):
             # for the multi-line case that can't be auto-converted safely).
             has_block_indicator = bool(indicator) and indicator[0] == "|"
             trailing_comment = m.group(3) or ""
+            # shell: with a cmd: key (and executable: beside it) is the module's
+            # dict form, kept where the free-form splitter cannot parse the
+            # command's quoting. Check its cmd block; never rewrite it.
+            cmd_form = None if indicator else find_shell_cmd_form(lines, i, shell_indent)
+            if cmd_form:
+                cmd_form["has_args"] = task_has_args_executable(lines, i)
+                if cmd_form["needs_pipefail"] or cmd_form["folded"] or not cmd_form["has_args"]:
+                    warnings.append({"type": "cmd_form", "line_idx": i, **cmd_form})
+                i += 1
+                continue
             # Scan forward for block content
             j = i + 1
             content_start = None
@@ -618,6 +676,8 @@ def main():
                     "literal '|' by hand before adding pipefail (auto-convert unsafe: "
                     "'|' preserves newlines, changing folded command semantics)"
                 )
+            elif w["type"] == "cmd_form":
+                print(f"  WARN  {rel}:{w['line_idx'] + 1}  {cmd_form_message(w)} (manual fix needed)")
             else:
                 print(
                     f"  WARN  {rel}:{w['line_idx'] + 1}  "

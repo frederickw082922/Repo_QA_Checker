@@ -444,7 +444,10 @@ ansible.builtin.shell: "cmd"  # noqa foo  ansible.builtin.shell: |  # noqa foo
 
 **Validation:** After each fix, runs `yamllint` (relaxed mode) and optionally `ansible-playbook --syntax-check` via a temporary playbook. Files that fail either check are reverted to their original content.
 
-**Warning (not auto-fixed):** If `set -o pipefail` is present but is not the first content line, the script emits `WARN file:line set -o pipefail present but not first content line` and skips the task. `pipefail` must be first to apply to all piped commands.
+**Warnings (not auto-fixed):** the script emits `WARN file:line ...` and skips the task when:
+- `set -o pipefail` is present but is not the first content line. `pipefail` must be first to apply to all piped commands.
+- the body is a folded `>` scalar spanning several lines. Converting it to `|` changes how the lines join, so convert it by hand.
+- the task uses the mapping form, `ansible.builtin.shell:` with `cmd: |` and `executable:`, and `set -o pipefail` is not the first line of `cmd:`, `cmd:` is folded, or `executable:` is missing. That form is kept where the free-form splitter cannot parse the command's quoting, so it is never rewritten.
 
 **Arguments:**
 - `tasks_dir` -- path to `tasks/` directory (recurses `*.yml`)
@@ -467,9 +470,11 @@ python check_shell_pipefail.py --all /path/to/STIG --compact
 - Missing `set -o pipefail` (or block scalar `|` indicator)
 - Missing `args: executable: "{{ <prefix>_shell_executable }}"`
 - `set -o pipefail` not first content line (warning)
+- A folded `>` multi-line body that must be converted to `|` by hand (warning)
+- A `shell:` mapping with `cmd:` whose first line is not `set -o pipefail`, whose `cmd:` is folded, or with no `executable:` (error)
 - `args.executable` present but not referencing the role's `*_shell_executable` variable
 
-Auto-detects `<prefix>_shell_executable` from `vars/main.yml` or the role defaults. Exit code `1` when any issue is found.
+Auto-detects `<prefix>_shell_executable` from `vars/main.yml` or the role defaults, and warns when it is absent only if the role has a shell task. Exit code `1` when any issue is found.
 
 **Exit codes:** `0` = nothing to fix, `1` = fixes applied (or dry-run with findings), `2` = error.
 
